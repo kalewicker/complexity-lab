@@ -1,0 +1,8 @@
+cmake_minimum_required(VERSION 3.24)
+project(ExternalCLabConsumer LANGUAGES CXX)
+find_package(CLab CONFIG REQUIRED)
+if(TARGET clab::substrate_api)
+    message(FATAL_ERROR "Evaluator-only install exported a substrate target")
+endif()
+add_executable(consumer main.cpp)
+target_link_libraries(consumer PRIVATE clab::trace clab::evaluator)

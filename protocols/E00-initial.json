@@ -1,0 +1,13 @@
+{
+  "protocol": "E00-initial-v1",
+  "plan": "complexity_growth_research_program_reviewed.md §16.1",
+  "scope": "bounded categorical and event trace slice on one local CPU build",
+  "checks": {
+    "E00a": "100 small categorical reference round trips, independent byte fixtures, malformed chunks and headers rejected",
+    "E00b": "tiny periodic binary CA, seeds 0–9 and checkpoints at work 0, 5 and 31, exact continuation and observation isolation",
+    "E00c": "install a build with CLAB_BUILD_SUBSTRATES=OFF, build an external consumer, run installed evaluator on independent fixtures",
+    "E00d": "recover the complete prefix from a truncated trace, reconcile one planned mock run stopped at work 5 of 8",
+    "tier0": "hand-checked state counts, frequencies, entropy, event activity, adjacent changes, recurrence and fixed byte-RLE ratio"
+  },
+  "limits": "engineering checks only. No discovery worlds, metric calibration, or claim of full G0 completion."
+}
