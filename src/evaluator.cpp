@@ -18,6 +18,12 @@ constexpr auto lookback = "state.recurrence_lookback_snapshots.v1";
 constexpr auto event_count = "activity.events.v1";
 constexpr auto births = "activity.births.v1";
 constexpr auto deaths = "activity.deaths.v1";
+constexpr auto entities = "relational.entity_count.v1";
+constexpr auto relations = "relational.relation_count.v1";
+constexpr auto ports = "relational.port_count.v1";
+constexpr auto entity_types = "relational.entity_type_count.v1";
+constexpr auto relation_types = "relational.relation_type_count.v1";
+constexpr auto arities = "relational.arity_count.v1";
 
 double rle_ratio(std::span<const TypeId> symbols) {
     std::uint64_t runs = 0;
@@ -43,6 +49,7 @@ void evaluate(IObservationSource& source, const MetricSink& sink, EvalLimits lim
     std::size_t history_bytes = 0;
     std::optional<std::size_t> fixed_site_count;
     bool saw_snapshot = false;
+    bool saw_relational = false;
     bool saw_events = false;
     const auto emit = [&](auto stamp, const char* id, MetricValue value,
                           std::optional<TypeId> symbol = std::nullopt) {
@@ -118,6 +125,28 @@ void evaluate(IObservationSource& source, const MetricSink& sink, EvalLimits lim
             }
             history_bytes += symbols.size_bytes();
             history.push_back(std::move(*snap));
+        } else if (const auto* graph = std::get_if<RelationalSnapshot>(&record->payload)) {
+            saw_relational = true;
+            emit(stamp, entities, std::uint64_t(graph->entities().size()));
+            emit(stamp, relations, std::uint64_t(graph->relations().size()));
+            emit(stamp, ports, std::uint64_t(graph->ports().size()));
+            std::map<TypeId, std::uint64_t> entity_histogram, relation_histogram, arity_histogram;
+            for (const auto& entity : graph->entities()) {
+                ++entity_histogram[entity.type];
+            }
+            for (const auto& relation : graph->relations()) {
+                ++relation_histogram[relation.type];
+                ++arity_histogram[relation.port_count];
+            }
+            for (const auto& [kind, count] : entity_histogram) {
+                emit(stamp, entity_types, count, kind);
+            }
+            for (const auto& [kind, count] : relation_histogram) {
+                emit(stamp, relation_types, count, kind);
+            }
+            for (const auto& [arity, count] : arity_histogram) {
+                emit(stamp, arities, count, arity);
+            }
         } else if (const auto* counts = std::get_if<EventCounts>(&record->payload)) {
             saw_events = true;
             emit(stamp, event_count, counts->events);
@@ -135,6 +164,11 @@ void evaluate(IObservationSource& source, const MetricSink& sink, EvalLimits lim
     }
     if (!saw_snapshot) {
         for (auto id : {site_count, entropy, type_count, compression_ratio, changed, recurrence, lookback}) {
+            missing(std::nullopt, id, MetricStatus::unsupported);
+        }
+    }
+    if (!saw_relational) {
+        for (auto id : {entities, relations, ports, entity_types, relation_types, arities}) {
             missing(std::nullopt, id, MetricStatus::unsupported);
         }
     }

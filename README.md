@@ -12,6 +12,7 @@ cmake --build --preset release --parallel
 ctest --preset release
 build/release/clab-fixture build/demo
 build/release/clab-inspect build/demo/trace.cltr
+build/release/clab-inspect --index build/demo/trace.cltr
 build/release/clab-eval build/demo/trace.cltr
 ```
 
@@ -34,4 +35,5 @@ Applications can link to `clab::trace` and `clab::evaluator` through `find_packa
 
 - [CLTR draft format and metric definitions](docs/cltr-v1.md)
 - [Initial verification protocol](protocols/E00-initial.json)
-- [Verification results and scope](docs/E00-initial-results.md)
+- [Initial verification](docs/E00-initial-results.md)
+- [Relational snapshot and index verification](docs/E00-relational-results.md)

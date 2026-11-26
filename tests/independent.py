@@ -55,6 +55,92 @@ def metric(rows, name, sequence="", symbol=""):
     return matches[0]
 
 
+def relational_payload(entities, relations, ports):
+    return (struct.pack("<3I", len(entities), len(relations), len(ports))
+            + b"".join(struct.pack("<QI", *row) for row in entities)
+            + b"".join(struct.pack("<Q4I", *row) for row in relations)
+            + b"".join(struct.pack("<QI", *row) for row in ports))
+
+
+def check_relational(args, directory):
+    relations = [(40, 7, 0, 2, 0), (50, 7, 2, 3, 1)]
+    entities = [(5, 2), (8, 2), (12, 3)]
+    ports = [(5, 0), (8, 0), (12, 1), (5, 2), (12, 2)]
+    payload = relational_payload(entities, relations, ports)
+    relabeled = relational_payload(
+        [(102, 3), (4, 2), (9, 2)],
+        [(401, 7, 0, 2, 0), (10, 7, 2, 3, 1)],
+        [(4, 0), (9, 0), (102, 1), (9, 2), (102, 2)],
+    )
+    chunks = [chunk(4, 0, 0, 0, payload),
+              chunk(77, 1, 0, 0, b"optional", flags=1),
+              chunk(4, 2, 1, 2, relabeled),
+              chunk(0, 3, 1, 2)]
+    prefix = header(META | {"encoding": "relational-fixture", "fixed_sites": False})
+    data = prefix + b"".join(chunks)
+    trace = directory / "relational.cltr"
+    trace.write_bytes(data)
+    rows = list(csv.DictReader(io.StringIO(run(args.eval, trace))))
+    expected = {
+        ("relational.entity_count.v1", ""): "3",
+        ("relational.relation_count.v1", ""): "2",
+        ("relational.port_count.v1", ""): "5",
+        ("relational.entity_type_count.v1", "2"): "2",
+        ("relational.entity_type_count.v1", "3"): "1",
+        ("relational.relation_type_count.v1", "7"): "2",
+        ("relational.arity_count.v1", "2"): "1",
+        ("relational.arity_count.v1", "3"): "1",
+    }
+    for seq in (0, 2):
+        found = {(row["metric_id"], row["symbol"]): row["value"]
+                 for row in rows if row["sequence"] == str(seq) and row["status"] == "valid"}
+        assert found == expected, found
+    assert metric(rows, "state.symbol_count.v1")["status"] == "unsupported"
+
+    offsets = [len(prefix) + sum(map(len, chunks[:i])) for i in range(len(chunks))]
+    index = list(csv.DictReader(io.StringIO(run(args.inspect, "--index", trace))))
+    assert len(index) == len(chunks)
+    for seq, (row, offset, encoded) in enumerate(zip(index, offsets, chunks)):
+        fields = ["type", "version", "flags", "sequence", "simulated_time", "work",
+                  "raw_bytes", "payload_bytes", "crc32c"]
+        wire = dict(zip(fields, struct.unpack("<HHIQdQIII", encoded[:44])))
+        del wire["raw_bytes"]
+        observed = {key: float(row[key]) if key == "simulated_time" else int(row[key])
+                    for key in wire}
+        assert observed == wire and observed["sequence"] == seq, row
+        assert int(row["header_offset"]) == offset, row
+
+    trace.write_bytes(data[:offsets[2] + 46])
+    partial = run(args.inspect, "--index", "--recover-prefix", trace, code=3)
+    assert list(csv.DictReader(io.StringIO(partial))) == index[:2]
+    run(args.inspect, "--index", trace, code=1)
+
+    malformed = [
+        relational_payload([(0, 2), *entities[1:]], relations, ports),
+        relational_payload([entities[0], entities[0], entities[2]], relations, ports),
+        relational_payload(entities, [(0, 7, 0, 2, 0), relations[1]], ports),
+        relational_payload(entities, [relations[0], (40, 7, 2, 3, 1)], ports),
+        relational_payload(entities, relations, [(999, 0), *ports[1:]]),
+        relational_payload(entities, [(40, 7, 1, 2, 0), relations[1]], ports),
+        relational_payload(entities, [relations[0], (50, 7, 2, 4, 1)], ports),
+        relational_payload(entities, [(40, 7, 0, 2, 2), relations[1]], ports),
+        relational_payload(entities, [relations[0], (50, 7, 2, 2, 1)], ports),
+        struct.pack("<3I", 0xFFFFFFFF, 0, 0),
+        payload + b"unexpected",
+    ]
+    for invalid_payload in malformed:
+        trace.write_bytes(prefix + chunk(4, 0, 0, 0, invalid_payload) + chunk(0, 1, 0, 0))
+        rejected = run(args.inspect, "--index", "--recover-prefix", trace, code=1)
+        assert not list(csv.DictReader(io.StringIO(rejected))), rejected
+
+    return {
+        "sha256": hashlib.sha256(data).hexdigest(),
+        "verified_header_offsets": offsets,
+        "valid_snapshot_diagnostics": len(expected),
+        "malformed_rejected": len(malformed),
+    }
+
+
 def check(args, directory):
     assert crc32c(b"123456789") == 0xE3069283
     first = struct.pack("<4I", 0, 0, 1, 1)
@@ -125,7 +211,10 @@ def check(args, directory):
         "categorical_checks": observed,
         "event_checks": {"events": 7, "births": 2, "deaths": 3},
         "malformed_rejected": len(malformed),
+        "relational": check_relational(args, directory),
     }
+    assert result["categorical_sha256"] == "3dda44df0c60342ddd2b6456bbb350ea66a50141d86dc62ba4e887a0000fc9ba"
+    assert result["events_sha256"] == "5f5e31d67be90e5eea677c262b01358df9cc2427ff86a17d975c44f4d34ddac1"
     if args.fixture:
         output = directory / "mock"
         run(args.fixture, output)

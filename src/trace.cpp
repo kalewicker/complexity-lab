@@ -22,6 +22,11 @@ constexpr std::uint16_t end_type = 0;
 constexpr std::uint16_t snapshot_type = 1;
 constexpr std::uint16_t events_type = 2;
 constexpr std::uint16_t ledger_type = 3;
+constexpr std::uint16_t relational_type = 4;
+constexpr std::uint64_t relational_prefix = 12;
+constexpr std::uint64_t entity_row_bytes = 12;
+constexpr std::uint64_t relation_row_bytes = 24;
+constexpr std::uint64_t port_row_bytes = 12;
 constexpr std::uint32_t optional_chunk = 1;
 static_assert(sizeof(double) == 8 && std::numeric_limits<double>::is_iec559);
 
@@ -124,11 +129,85 @@ void validate_ledger(const WorkLedger& value) {
         throw Error(ErrorCode::invalid, "ledger peak below live bytes");
     }
 }
+
+std::uint64_t relational_size(std::uint64_t entities, std::uint64_t relations, std::uint64_t ports) {
+    auto size = checked_add(relational_prefix, checked_multiply(entities, entity_row_bytes));
+    size = checked_add(size, checked_multiply(relations, relation_row_bytes));
+    return checked_add(size, checked_multiply(ports, port_row_bytes));
+}
+
+RelationalSnapshot decode_relational(const Bytes& bytes) {
+    if (bytes.size() < relational_prefix) {
+        throw Error(ErrorCode::invalid, "short relational snapshot prefix");
+    }
+    const auto entity_count = get<std::uint32_t>(bytes, 0);
+    const auto relation_count = get<std::uint32_t>(bytes, 4);
+    const auto port_count = get<std::uint32_t>(bytes, 8);
+    if (bytes.size() != relational_size(entity_count, relation_count, port_count)) {
+        throw Error(ErrorCode::invalid, "invalid relational snapshot length");
+    }
+    std::vector<EntityRow> entities;
+    std::vector<RelationRow> relations;
+    std::vector<PortRow> ports;
+    entities.reserve(entity_count);
+    relations.reserve(relation_count);
+    ports.reserve(port_count);
+    std::size_t offset = relational_prefix;
+    for (std::uint32_t i = 0; i < entity_count; ++i, offset += entity_row_bytes) {
+        entities.push_back({get<EntityId>(bytes, offset), get<TypeId>(bytes, offset + 8)});
+    }
+    for (std::uint32_t i = 0; i < relation_count; ++i, offset += relation_row_bytes) {
+        const auto flags = get<std::uint32_t>(bytes, offset + 20);
+        if (flags > 1) {
+            throw Error(ErrorCode::invalid, "unknown relational row flags");
+        }
+        relations.push_back({get<RelationId>(bytes, offset), get<TypeId>(bytes, offset + 8),
+                             get<std::uint32_t>(bytes, offset + 12),
+                             get<std::uint32_t>(bytes, offset + 16), flags == 1});
+    }
+    for (std::uint32_t i = 0; i < port_count; ++i, offset += port_row_bytes) {
+        ports.push_back({get<EntityId>(bytes, offset), get<std::uint32_t>(bytes, offset + 8)});
+    }
+    return RelationalSnapshot(entities, relations, ports);
+}
+
+Bytes encode_relational(const RelationalSnapshot& snapshot, std::uint32_t chunk_limit) {
+    const auto entities = snapshot.entities();
+    const auto relations = snapshot.relations();
+    const auto ports = snapshot.ports();
+    const auto size = relational_size(entities.size(), relations.size(), ports.size());
+    if (size > chunk_limit) {
+        throw Error(ErrorCode::limit, "relational snapshot byte cap exceeded");
+    }
+    Bytes bytes;
+    bytes.reserve(size);
+    put(bytes, static_cast<std::uint32_t>(entities.size()));
+    put(bytes, static_cast<std::uint32_t>(relations.size()));
+    put(bytes, static_cast<std::uint32_t>(ports.size()));
+    for (const auto& row : entities) {
+        put(bytes, row.id);
+        put(bytes, row.type);
+    }
+    for (const auto& row : relations) {
+        put(bytes, row.id);
+        put(bytes, row.type);
+        put(bytes, row.first_port);
+        put(bytes, row.port_count);
+        put(bytes, std::uint32_t{row.ordered});
+    }
+    for (const auto& row : ports) {
+        put(bytes, row.entity);
+        put(bytes, row.role);
+    }
+    return bytes;
+}
 }
 
 struct TraceReader::Impl {
-    Impl(const std::filesystem::path& path, TraceMode chosen_mode, TraceLimits chosen_limits)
-        : input(path, std::ios::binary), mode(chosen_mode), limits(chosen_limits) {
+    Impl(const std::filesystem::path& path, TraceMode chosen_mode, TraceLimits chosen_limits,
+         ChunkIndexSink sink)
+        : input(path, std::ios::binary), mode(chosen_mode), limits(chosen_limits),
+          index_sink(std::move(sink)) {
         if (!input) {
             throw Error(ErrorCode::io, "could not open trace");
         }
@@ -151,6 +230,16 @@ struct TraceReader::Impl {
             throw Error(ErrorCode::incomplete, "short CLTR metadata");
         }
         meta = parse_metadata(bytes);
+        next_offset = prefix_size + std::uint64_t{size};
+    }
+
+    void accept(const ChunkIndexEntry& entry) {
+        previous = entry.stamp;
+        next_offset = checked_add(next_offset, chunk_header_size + std::uint64_t{entry.payload_bytes});
+        ++chunks;
+        if (index_sink) {
+            index_sink(entry);
+        }
     }
 
     std::optional<ObservationRecord> short_chunk() {
@@ -168,11 +257,13 @@ struct TraceReader::Impl {
     TraceStatus status{TraceStatus::reading};
     std::optional<Stamp> previous;
     bool failed{};
-    std::uint64_t chunks{};
+    std::uint64_t chunks{}, next_offset{};
+    ChunkIndexSink index_sink;
 };
 
-TraceReader::TraceReader(const std::filesystem::path& path, TraceMode mode, TraceLimits limits)
-    : impl_(std::make_unique<Impl>(path, mode, limits)) {}
+TraceReader::TraceReader(const std::filesystem::path& path, TraceMode mode, TraceLimits limits,
+                         ChunkIndexSink index_sink)
+    : impl_(std::make_unique<Impl>(path, mode, limits, std::move(index_sink))) {}
 TraceReader::~TraceReader() = default;
 
 const Metadata& TraceReader::metadata() const noexcept { return impl_->meta; }
@@ -214,13 +305,14 @@ std::optional<ObservationRecord> TraceReader::next() {
             if (!read_bytes(reader.input, bytes)) {
                 return reader.short_chunk();
             }
-            if (checksum(std::span(header).first(40), bytes) != get<std::uint32_t>(header, 40)) {
+            const auto crc = get<std::uint32_t>(header, 40);
+            if (checksum(std::span(header).first(40), bytes) != crc) {
                 throw Error(ErrorCode::invalid, "chunk checksum mismatch");
             }
-            reader.previous = stamp;
-            ++reader.chunks;
-            if (type > ledger_type || version != 1) {
+            const ChunkIndexEntry entry{stamp, reader.next_offset, type, version, flags, size, crc};
+            if (type > relational_type || version != 1) {
                 if (type != end_type && (flags & optional_chunk)) {
+                    reader.accept(entry);
                     continue;
                 }
                 throw Error(ErrorCode::unsupported, "unknown required chunk or version");
@@ -238,6 +330,7 @@ std::optional<ObservationRecord> TraceReader::next() {
                 if (reader.input.bad()) {
                     throw Error(ErrorCode::io, "end of trace check failed");
                 }
+                reader.accept(entry);
                 reader.status = TraceStatus::complete;
                 return std::nullopt;
             case snapshot_type: {
@@ -249,7 +342,9 @@ std::optional<ObservationRecord> TraceReader::next() {
                 for (std::size_t offset = 0; offset < size; offset += sizeof(TypeId)) {
                     symbols.push_back(get<TypeId>(bytes, offset));
                 }
-                return ObservationRecord{stamp, Snapshot(symbols)};
+                ObservationRecord record{stamp, Snapshot(symbols)};
+                reader.accept(entry);
+                return record;
             }
             case events_type: {
                 if (size != 24) {
@@ -258,6 +353,7 @@ std::optional<ObservationRecord> TraceReader::next() {
                 EventCounts events{get<std::uint64_t>(bytes, 0), get<std::uint64_t>(bytes, 8),
                                    get<std::uint64_t>(bytes, 16)};
                 validate_events(events);
+                reader.accept(entry);
                 return ObservationRecord{stamp, events};
             }
             case ledger_type: {
@@ -268,7 +364,13 @@ std::optional<ObservationRecord> TraceReader::next() {
                                   get<std::uint64_t>(bytes, 16), get<std::uint64_t>(bytes, 24),
                                   get<std::uint64_t>(bytes, 32), get<std::uint64_t>(bytes, 40)};
                 validate_ledger(ledger);
+                reader.accept(entry);
                 return ObservationRecord{stamp, ledger};
+            }
+            case relational_type: {
+                ObservationRecord record{stamp, decode_relational(bytes)};
+                reader.accept(entry);
+                return record;
             }
             }
         }
@@ -369,6 +471,9 @@ void TraceWriter::append(const ObservationRecord& record) {
         for (const auto symbol : snap->symbols()) {
             put(bytes, symbol);
         }
+    } else if (const auto* snapshot = std::get_if<RelationalSnapshot>(&record.payload)) {
+        type = relational_type;
+        bytes = encode_relational(*snapshot, writer.limits.chunk_bytes);
     } else if (const auto* events = std::get_if<EventCounts>(&record.payload)) {
         type = events_type;
         validate_events(*events);

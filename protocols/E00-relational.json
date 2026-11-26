@@ -1,0 +1,13 @@
+{
+  "protocol": "E00-relational-v1",
+  "scope": "typed relational snapshots and validated chunk offsets",
+  "checks": {
+    "round_trip": "preserve entity and relation IDs, ordered ports, roles and repeated endpoints through C++ write and read",
+    "independent": "read Python-authored hypergraph with 3 entities, 2 relations, 5 port incidences, arities 2 and 3",
+    "invariance": "relabel IDs and reorder entity records or unordered ports, with counts and type/arity histograms equal",
+    "rejection": "reject duplicate and zero IDs, dangling endpoints, noncontiguous ranges, bad flags, inconsistent lengths and undeclared trailing ports",
+    "index": "match independently calculated offsets for all chunks including an unknown optional kind and end marker; classify a truncated suffix as incomplete and omit its chunk",
+    "compatibility": "initial categorical and event-only fixture hashes and existing diagnostics retained; verify installed evaluator with substrates disabled"
+  },
+  "limits": "local engineering fixtures only; no calibration, structural complexity estimate, or scientific world runs"
+}

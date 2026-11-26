@@ -5,6 +5,7 @@
 #endif
 
 #include <algorithm>
+#include <array>
 #include <stdlib.h>
 #include <unistd.h>
 #include <filesystem>
@@ -93,6 +94,31 @@ void round_trips(const std::filesystem::path& directory) {
             recovered.status() == clab::TraceStatus::incomplete, "recover unfinished writer");
 }
 
+void relational_round_trip(const std::filesystem::path& directory) {
+    const auto path = directory / "relational.cltr";
+    std::array<clab::EntityRow, 2> entities{{{42, 1}, {7, 3}}};
+    const std::array<clab::RelationRow, 2> relations{{{6, 2, 0, 3, true}, {7, 9, 3, 0, false}}};
+    const std::array<clab::PortRow, 3> ports{{{42, 4}, {7, 5}, {42, 5}}};
+    const clab::RelationalSnapshot snapshot(entities, relations, ports);
+    const auto original = entities;
+    entities[0].id = 7;
+    expect_error(clab::ErrorCode::invalid, [&] {
+        (void)clab::RelationalSnapshot(entities, relations, ports);
+    });
+    clab::TraceWriter writer(path, {"relational", "fixture-v1", "step", true, false});
+    writer.append({{}, snapshot});
+    writer.finish();
+
+    clab::TraceReader reader(path);
+    const auto record = reader.next();
+    require(record.has_value(), "missing relational snapshot");
+    const auto& mapped = std::get<clab::RelationalSnapshot>(record->payload);
+    require(std::ranges::equal(mapped.entities(), original), "relational entity round trip");
+    require(std::ranges::equal(mapped.relations(), relations), "relation round trip");
+    require(std::ranges::equal(mapped.ports(), ports), "relational port round trip");
+    require(!reader.next() && reader.status() == clab::TraceStatus::complete, "relational end");
+}
+
 #ifdef CLAB_TEST_SUBSTRATES
 void replay() {
     expect_error(clab::ErrorCode::limit, [] { clab::BinaryCa world(9, 0, 71); });
@@ -124,6 +150,7 @@ int main() {
     try {
         TempDirectory temp;
         round_trips(temp.path);
+        relational_round_trip(temp.path);
 #ifdef CLAB_TEST_SUBSTRATES
         replay();
 #endif

@@ -1,6 +1,6 @@
 # CLTR 1.0 draft wire format
 
-This milestone implements uncompressed categorical snapshots, event counts and a small work ledger. Multi-byte integers are unsigned little-endian. Floating-point time is IEEE 754 binary64 in little-endian order. Table sizes are bytes. There is no padding.
+This milestone implements uncompressed categorical and relational snapshots, event counts and a small work ledger. Multi-byte integers are unsigned little-endian. Floating-point time is IEEE 754 binary64 in little-endian order. Table sizes are bytes. There is no padding.
 
 ## File prefix
 
@@ -38,10 +38,30 @@ An unknown major version or required chunk fails validation. Compatible minor ve
 | 2 | Three u64 integers for event count, births and deaths over the batch. An event may account for several births or deaths |
 | 3 | Six u64 integers for cumulative logical updates, reads, writes, RNG draws, current cell/state bytes and peak cell/state bytes |
 
+Type 4 is a typed relational snapshot. Readers without type 4 support reject it as an unknown required chunk. Files using types 0–3 retain their original layout.
+
+### Type 4 payload
+
+Three u32 counts give the number of entities, relations and ports. The counts are followed by the three row arrays, in that order. The payload length must equal `12 + 12*entities + 24*relations + 12*ports`.
+
+| Row | Fields in wire order |
+|---|---|
+| Entity | u64 ID, u32 type |
+| Relation | u64 ID, u32 type, u32 first-port index, u32 port count, u32 flags |
+| Port | u64 entity ID, u32 role |
+
+IDs are nonzero and unique within their respective entity or relation table. Every port references an entity in the snapshot. Relation port ranges partition the port table in row order, starting at index zero. Zero-port relations and repeated endpoints are allowed. Relation flag bit 0 marks ordered ports. All other bits must be zero. Role values and type codes derive their meaning from the producer's encoding. The wire order, roles and IDs are preserved when reading. The format carries no attributes in this payload version.
+
+## Validation and index
+
 A complete trace has a checked end marker. Recovery exposes only the complete validated prefix of a trace cut short after valid metadata. Checksum failures remain errors in recovery mode. On supported local filesystems the writer stages in a unique adjacent directory and publishes by creating a hard link after closing the staged file. This atomically claims the destination without replacing an existing trace. The staging path remains available if publication fails. A process crash can leave a staging directory. The prototype makes no power-loss durability guarantee.
+
+`clab-inspect --index TRACE.cltr` emits a CSV offset index derived from a full sequential validation. Offsets point to chunk headers and are counted from byte zero. Entries include checked envelope fields, cover skipped optional chunks and include the end marker only after EOF is verified. The CSV does not authenticate the trace or provide direct seeking. Keep it paired with the exact input bytes. Exit 0 indicates a complete index. With `--recover-prefix`, exit 3 indicates a checked prefix of an incomplete trace. An error can leave earlier rows on stdout. Discard the output on any other nonzero exit.
 
 ## Tier 0 output
 
 `clab-eval` streams CSV with trace identity, stamp, encoding, coverage flag, metric ID, optional symbol, value and status. The exit status must be checked before using the CSV. A suffix error can occur after earlier rows were written. Missing values are empty with an explicit status. Counts on sampled traces describe the supplied sample.
 
 The entropy diagnostic is empirical Shannon entropy in bits per symbol. Byte RLE uses pairs of one-byte length and one-byte value, splits runs at 255, and scores the canonical little-endian payload only. Changed sites compare consecutive fixed-site snapshots. Recurrence uses exact symbol equality across up to 16 previous snapshots within 4 MiB of history. Lag zero means no match within the reported lookback. These diagnostics describe the observations under this encoding and budget.
+
+For type 4, the evaluator reports entity, relation and port counts plus entity-type, relation-type and relation-arity histograms. The histogram key occupies the CSV `symbol` column. A hyperedge contributes one relation and as many port incidences as it has ports. Repeated endpoints count as distinct incidences. Identifier values and port order do not enter these diagnostics.

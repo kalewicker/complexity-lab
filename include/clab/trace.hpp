@@ -3,6 +3,7 @@
 #include <clab/observation.hpp>
 
 #include <filesystem>
+#include <functional>
 #include <memory>
 
 namespace clab {
@@ -14,10 +15,21 @@ struct TraceLimits {
     std::uint32_t chunk_bytes = 4 * 1024 * 1024;
 };
 
+struct ChunkIndexEntry {
+    Stamp stamp;
+    std::uint64_t header_offset{};
+    std::uint16_t type{}, version{};
+    std::uint32_t flags{}, payload_bytes{}, crc32c{};
+};
+
+// Called in file order only after each chunk has passed validation.
+using ChunkIndexSink = std::function<void(const ChunkIndexEntry&)>;
+
 class TraceReader final : public IObservationSource {
 public:
     explicit TraceReader(const std::filesystem::path& path,
-                         TraceMode mode = TraceMode::strict, TraceLimits limits = {});
+                         TraceMode mode = TraceMode::strict, TraceLimits limits = {},
+                         ChunkIndexSink index_sink = {});
     ~TraceReader() override;
     [[nodiscard]] const Metadata& metadata() const noexcept override;
     [[nodiscard]] TraceStatus status() const noexcept;
