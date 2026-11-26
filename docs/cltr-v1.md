@@ -86,6 +86,8 @@ A complete trace has a checked end marker. Recovery exposes only the complete va
 
 `clab-inspect --checkpoints TRACE.cltr` lists checkpoint sequence, work, format, byte length and the lowercase hexadecimal SHA-256 digest. It uses the same exit statuses as the index. A complete scan verifies the trace envelope and reference encoding.
 
+`clab-inspect --verify-checkpoint SEQUENCE CHECKPOINT_FILE TRACE.cltr` first validates the complete trace and selects the reference by chunk sequence. It then checks the explicitly supplied regular file. Verification streams through a 64 KiB buffer and reports success only when the byte count and SHA-256 both match. Argument errors exit 2. Invalid traces, missing references and target mismatches exit 1. A successful match establishes the identity of the bytes read against the reference. Checkpoint trust, decoding and state restore belong to the producer's workflow.
+
 ## Tier 0 output
 
 `clab-eval` streams CSV with trace identity, stamp, encoding, coverage flag, metric ID, optional symbol, value and status. The exit status must be checked before using the CSV. A suffix error can occur after earlier rows were written. Missing values are empty with an explicit status. Counts on sampled traces describe the supplied sample.

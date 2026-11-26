@@ -1,0 +1,11 @@
+{
+  "protocol": "E00-checkpoint-target-v1",
+  "scope": "verify an explicitly selected CLTR checkpoint reference against an explicitly supplied local file",
+  "checks": {
+    "match": "compare a 30-byte target and a 131329-byte target against independently computed SHA-256 values",
+    "mismatch": "reject same-length changed bytes, shorter and longer targets, and missing or nonregular files",
+    "selection": "select by exact chunk sequence; reject absent sequences, non-reference chunks, invalid numbers, and incomplete or corrupt traces before reporting success",
+    "compatibility": "keep existing trace fixture hashes unchanged; run release, ASan/UBSan and substrate-free installed checks"
+  },
+  "limits": "verify byte identity only; no checkpoint decoding, state restore, or research run"
+}

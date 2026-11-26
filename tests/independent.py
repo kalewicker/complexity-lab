@@ -4,6 +4,7 @@ import csv
 import hashlib
 import io
 import json
+import os
 import struct
 import subprocess
 import tempfile
@@ -149,6 +150,11 @@ def detailed_record(work, event_type, flags=0, rule=0, participants=(), created=
             + struct.pack(f"<{len(ids)}Q", *ids) + delta)
 
 
+def checkpoint_payload(content, format_id):
+    digest = hashlib.sha256(content).digest()
+    return struct.pack("<Q32sI", len(content), digest, len(format_id)) + format_id
+
+
 def check_temporal(args, directory):
     encoded_events = (
         detailed_record(2, 7, rule=19, participants=(1, 2), created=(2,), delta=b"\x00\xff"),
@@ -159,7 +165,7 @@ def check_temporal(args, directory):
     checkpoint = b"independent checkpoint content"
     digest = hashlib.sha256(checkpoint)
     fmt = b"fixture.checkpoint-v1"
-    ref = struct.pack("<Q32sI", len(checkpoint), digest.digest(), len(fmt)) + fmt
+    ref = checkpoint_payload(checkpoint, fmt)
     prefix = header(META | {"encoding": "temporal-fixture", "fixed_sites": False})
     event_chunk = chunk(5, 0, 4, 4, events)
     ref_chunk = chunk(6, 1, 4, 4, ref)
@@ -211,6 +217,70 @@ def check_temporal(args, directory):
         "counts": counts,
         "invalid_event_batches_rejected": len(invalid_batches),
         "invalid_checkpoint_refs_rejected": len(invalid_refs),
+    }
+
+
+def check_checkpoint_targets(args, directory):
+    small = b"independent checkpoint content"
+    large = bytes(range(256)) * 513 + b"\x00"
+    format_id = b"fixture.checkpoint-v1"
+    end = chunk(0, 3, 2, 2)
+    prefix = (header() + chunk(2, 0, 0, 0, struct.pack("<3Q", 0, 0, 0))
+              + chunk(6, 1, 1, 1, checkpoint_payload(small, format_id))
+              + chunk(6, 2, 2, 2, checkpoint_payload(large, format_id)))
+    trace = directory / "checkpoint-targets.cltr"
+    trace.write_bytes(prefix + end)
+    target = directory / "checkpoint target.bin"
+
+    def verify(sequence, path=target):
+        return subprocess.run(
+            [str(args.inspect), "--verify-checkpoint", str(sequence), str(path), str(trace)],
+            capture_output=True, text=True, timeout=15,
+        )
+
+    matches = []
+    for sequence, content in ((1, small), (2, large)):
+        target.write_bytes(content)
+        result = verify(sequence)
+        assert result.returncode == 0, result.stderr
+        assert result.stdout.splitlines() == ["status=verified", f"sequence={sequence}"]
+        matches.append({"sequence": sequence, "size_bytes": len(content),
+                        "sha256": hashlib.sha256(content).hexdigest()})
+
+    rejections = []
+
+    def reject(label, message, sequence=1, path=target, code=1):
+        result = verify(sequence, path)
+        assert result.returncode == code and not result.stdout, result
+        assert message in result.stderr, result.stderr
+        rejections.append(label)
+
+    for label, content, message in (
+        ("same-size changed bytes", b"X" + small[1:], "SHA-256 mismatch"),
+        ("shorter target", small[:-1], "size mismatch"),
+        ("longer target", small + b"X", "size mismatch"),
+    ):
+        target.write_bytes(content)
+        reject(label, message)
+    target.write_bytes(small)
+    reject("absent target", "could not open", path=directory / "missing")
+    reject("directory target", "must be a regular file", path=directory)
+    pipe = directory / "pipe"
+    os.mkfifo(pipe)
+    reject("FIFO target", "must be a regular file", path=pipe)
+    reject("aggregate event sequence", "no checkpoint reference", sequence=0)
+    reject("absent sequence", "no checkpoint reference", sequence=900)
+    reject("invalid sequence", "invalid checkpoint sequence", sequence="1x", code=2)
+    reject("overflowing sequence", "invalid checkpoint sequence", sequence=2**64, code=2)
+
+    trace.write_bytes(prefix + end[:-1])
+    reject("truncated trace after matching reference", "before a complete end chunk")
+    trace.write_bytes(prefix + end[:-1] + bytes([end[-1] ^ 1]))
+    reject("corrupt trace after matching reference", "checksum mismatch")
+    return {
+        "trace_sha256": hashlib.sha256(prefix + end).hexdigest(),
+        "matches": matches,
+        "rejections": rejections,
     }
 
 
@@ -288,10 +358,12 @@ def check(args, directory):
         "malformed_rejected": len(malformed),
         "relational": check_relational(args, directory),
         "temporal": check_temporal(args, directory),
+        "checkpoint_targets": check_checkpoint_targets(args, directory),
     }
     assert result["categorical_sha256"] == "3dda44df0c60342ddd2b6456bbb350ea66a50141d86dc62ba4e887a0000fc9ba"
     assert result["events_sha256"] == "5f5e31d67be90e5eea677c262b01358df9cc2427ff86a17d975c44f4d34ddac1"
     assert result["relational"]["sha256"] == "b9d66dd6527a31254bd27f97840a345fde40c5b100507d0def7720ecd410412d"
+    assert result["temporal"]["trace_sha256"] == "602af49f1f3105f4a1db42c61c69e67fdb9235f48a194863f8500bb0725f4e60"
     if args.fixture:
         output = directory / "mock"
         run(args.fixture, output)
