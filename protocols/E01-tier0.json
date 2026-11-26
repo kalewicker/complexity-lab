@@ -1,0 +1,14 @@
+{
+  "protocol": "E01-tier0-v1",
+  "scope": "engineering checks for categorical run length and relational incidence diagnostics, using existing CLTR types",
+  "panel": [
+    {"id": "F00/F19", "input": "uniform 8-symbol snapshot and empty snapshot", "expected": "longest runs 8 and 0; entropy 0 and insufficient_data"},
+    {"id": "F01", "input": "16 distinct categorical symbols", "expected": "entropy 4 bits per symbol; longest run 1"},
+    {"id": "F02", "input": "1, 4, 16 and 64 disjoint copies of a 3-entity relation", "expected": "components equal copies; all entities have port degree 1"},
+    {"id": "F03", "input": "path graphs with 1, 2, 4 and 8 entities", "expected": "one component throughout; exact endpoint and interior degree counts"},
+    {"id": "F04", "input": "two unchanged snapshots with a repeated endpoint, two modules and one isolated vertex, preceded by an empty graph", "expected": "three components; degree counts 0:1, 1:3, 2:1; empty graph has zero components"},
+    {"id": "F05/F23", "input": "seven snapshots repeating with period three, with and without interleaved optional transport chunks", "expected": "lags 0, 0, 3, 3, 3, 3 after the first sample; valid diagnostics match by observation work"},
+    {"id": "F11", "input": "existing relabeled hypergraph pair", "expected": "degree and component diagnostics agree across relabeling and port permutation"}
+  ],
+  "limits": "tier-0 fixture evidence only; no inference about entropy sources, scientific calibration, causal organization or complexity growth"
+}

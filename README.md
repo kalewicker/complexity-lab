@@ -46,3 +46,4 @@ Applications can link to `clab::trace` and `clab::evaluator` through `find_packa
 - [Detailed event and checkpoint reference verification](docs/E00-events-results.md)
 - [Checkpoint target verification](docs/E00-checkpoint-target-results.md)
 - [Worker watchdog and crash reconciliation](docs/E00-worker-results.md)
+- [Tier-0 structural fixture checks](docs/E01-tier0-fixtures.md)

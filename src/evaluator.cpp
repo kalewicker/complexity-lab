@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <deque>
+#include <limits>
 #include <map>
 #include <utility>
 
@@ -12,6 +13,7 @@ constexpr auto site_count = "state.symbol_count.v1";
 constexpr auto entropy = "state.shannon_bits_per_symbol.v1";
 constexpr auto type_count = "state.type_count.v1";
 constexpr auto compression_ratio = "state.rle_bytes_per_raw_byte.v1";
+constexpr auto longest_run = "state.longest_symbol_run.v1";
 constexpr auto changed = "state.changed_sites.v1";
 constexpr auto recurrence = "state.recurrence_lag_snapshots.v1";
 constexpr auto lookback = "state.recurrence_lookback_snapshots.v1";
@@ -26,6 +28,80 @@ constexpr auto ports = "relational.port_count.v1";
 constexpr auto entity_types = "relational.entity_type_count.v1";
 constexpr auto relation_types = "relational.relation_type_count.v1";
 constexpr auto arities = "relational.arity_count.v1";
+constexpr auto components = "relational.component_count.v1";
+constexpr auto port_degrees = "relational.port_degree_count.v1";
+
+std::uint64_t longest_symbol_run(std::span<const TypeId> symbols) {
+    std::uint64_t longest = 0, length = 0;
+    TypeId previous{};
+    for (const auto symbol : symbols) {
+        length = symbol == previous ? length + 1 : 1;
+        longest = std::max(longest, length);
+        previous = symbol;
+    }
+    return longest;
+}
+
+struct IncidenceDiagnostics {
+    std::uint64_t component_count{};
+    std::map<std::uint64_t, std::uint64_t> degree_counts;
+};
+
+IncidenceDiagnostics measure_incidence(const RelationalSnapshot& graph) {
+    std::vector<EntityId> ids;
+    ids.reserve(graph.entities().size());
+    for (const auto& row : graph.entities()) {
+        ids.push_back(row.id);
+    }
+    std::ranges::sort(ids);
+
+    struct Node {
+        std::size_t parent;
+        std::uint64_t degree{};
+        std::size_t component_size{1};
+    };
+    std::vector<Node> nodes;
+    nodes.reserve(ids.size());
+    for (std::size_t i = 0; i < ids.size(); ++i) {
+        nodes.push_back({i});
+    }
+    const auto root = [&](std::size_t node) {
+        while (nodes[node].parent != node) {
+            nodes[node].parent = nodes[nodes[node].parent].parent;
+            node = nodes[node].parent;
+        }
+        return node;
+    };
+
+    IncidenceDiagnostics result{ids.size(), {}};
+    for (const auto& relation : graph.relations()) {
+        std::optional<std::size_t> anchor;
+        for (const auto& port : graph.ports().subspan(relation.first_port, relation.port_count)) {
+            // Snapshot validation guarantees that each endpoint is in the table.
+            const auto index = static_cast<std::size_t>(
+                std::ranges::lower_bound(ids, port.entity) - ids.begin());
+            ++nodes[index].degree;
+            if (!anchor) {
+                anchor = index;
+                continue;
+            }
+            auto a = root(*anchor), b = root(index);
+            if (a == b) {
+                continue;
+            }
+            if (nodes[a].component_size < nodes[b].component_size) {
+                std::swap(a, b);
+            }
+            nodes[b].parent = a;
+            nodes[a].component_size += nodes[b].component_size;
+            --result.component_count;
+        }
+    }
+    for (const auto& node : nodes) {
+        ++result.degree_counts[node.degree];
+    }
+    return result;
+}
 
 double rle_ratio(std::span<const TypeId> symbols) {
     std::uint64_t runs = 0;
@@ -71,6 +147,7 @@ void evaluate(IObservationSource& source, const MetricSink& sink, EvalLimits lim
                 ++histogram[symbol];
             }
             emit(stamp, site_count, std::uint64_t(symbols.size()));
+            emit(stamp, longest_run, longest_symbol_run(symbols));
             double bits = 0;
             for (auto [symbol, count] : histogram) {
                 const auto probability = static_cast<double>(count) / symbols.size();
@@ -149,6 +226,16 @@ void evaluate(IObservationSource& source, const MetricSink& sink, EvalLimits lim
             for (const auto& [arity, count] : arity_histogram) {
                 emit(stamp, arities, count, arity);
             }
+            const auto incidence = measure_incidence(*graph);
+            emit(stamp, components, incidence.component_count);
+            if (!incidence.degree_counts.empty() &&
+                incidence.degree_counts.rbegin()->first > std::numeric_limits<TypeId>::max()) {
+                missing(stamp, port_degrees, MetricStatus::budget_exceeded);
+            } else {
+                for (const auto& [degree, count] : incidence.degree_counts) {
+                    emit(stamp, port_degrees, count, static_cast<TypeId>(degree));
+                }
+            }
         } else if (const auto* counts = std::get_if<EventCounts>(&record->payload)) {
             saw_events = true;
             emit(stamp, event_count, counts->events);
@@ -181,12 +268,12 @@ void evaluate(IObservationSource& source, const MetricSink& sink, EvalLimits lim
         }
     }
     if (!saw_snapshot) {
-        for (auto id : {site_count, entropy, type_count, compression_ratio, changed, recurrence, lookback}) {
+        for (auto id : {site_count, entropy, type_count, compression_ratio, longest_run, changed, recurrence, lookback}) {
             missing(std::nullopt, id, MetricStatus::unsupported);
         }
     }
     if (!saw_relational) {
-        for (auto id : {entities, relations, ports, entity_types, relation_types, arities}) {
+        for (auto id : {entities, relations, ports, entity_types, relation_types, arities, components, port_degrees}) {
             missing(std::nullopt, id, MetricStatus::unsupported);
         }
     }

@@ -93,6 +93,9 @@ def check_relational(args, directory):
         ("relational.relation_type_count.v1", "7"): "2",
         ("relational.arity_count.v1", "2"): "1",
         ("relational.arity_count.v1", "3"): "1",
+        ("relational.component_count.v1", ""): "1",
+        ("relational.port_degree_count.v1", "1"): "1",
+        ("relational.port_degree_count.v1", "2"): "2",
     }
     for seq in (0, 2):
         found = {(row["metric_id"], row["symbol"]): row["value"]
@@ -403,6 +406,96 @@ def check_worker_panel(args, directory):
     return results
 
 
+def check_tier0_panel(args, directory):
+    receipts = {}
+
+    def evaluate_trace(name, records, fixed_sites=False, decorate=False):
+        # Optional records share the observation stamp without changing its work.
+        chunks = []
+        for work, (kind, payload) in enumerate(records):
+            if decorate:
+                chunks.append(chunk(99, len(chunks), work, work, b"frame", flags=1))
+            chunks.append(chunk(kind, len(chunks), work, work, payload))
+        chunks.append(chunk(0, len(chunks), len(records) - 1, len(records) - 1))
+        data = (header(META | {"run_id": name, "fixed_sites": fixed_sites})
+                + b"".join(chunks))
+        trace = directory / f"{name}.cltr"
+        trace.write_bytes(data)
+        receipts[name] = hashlib.sha256(data).hexdigest()
+        return list(csv.DictReader(io.StringIO(run(args.eval, trace))))
+
+    def cat(symbols):
+        return 1, struct.pack(f"<{len(symbols)}I", *symbols)
+
+    def graph(entity_count, endpoints):
+        # Each tuple defines one relation, including duplicate and zero-port cases.
+        relation_rows = []
+        port_rows = []
+        for index, incident in enumerate(endpoints, 1):
+            relation_rows.append((index, 1, len(port_rows), len(incident), 0))
+            port_rows.extend((entity, 0) for entity in incident)
+        entities = [(index, 1) for index in range(1, entity_count + 1)]
+        return 4, relational_payload(entities, relation_rows, port_rows)
+
+    def assert_value(rows, name, sequence, expected):
+        row = metric(rows, name, sequence)
+        assert (row["value"], row["status"]) == (str(expected), "valid"), row
+
+    rows = evaluate_trace("categorical-edges", [cat([0] * 8), cat([]), cat(list(range(16)))])
+    for seq, longest in enumerate((8, 0, 1)):
+        assert_value(rows, "state.longest_symbol_run.v1", seq, longest)
+    for seq, entropy in ((0, 0), (2, 4)):
+        assert_value(rows, "state.shannon_bits_per_symbol.v1", seq, entropy)
+    empty = metric(rows, "state.shannon_bits_per_symbol.v1", 1)
+    assert (empty["value"], empty["status"]) == ("", "insufficient_data")
+
+    def assert_incidence(rows, sequence, component_count, degrees):
+        assert_value(rows, "relational.component_count.v1", sequence, component_count)
+        counts = {
+            int(row["symbol"]): int(row["value"]) for row in rows
+            if row["metric_id"] == "relational.port_degree_count.v1"
+            and row["sequence"] == str(sequence) and row["status"] == "valid"
+        }
+        assert counts == degrees, counts
+
+    copies = (1, 4, 16, 64)
+    tiled = [graph(3 * n, [(3 * i + 1, 3 * i + 2, 3 * i + 3) for i in range(n)])
+             for n in copies]
+    rows = evaluate_trace("repeated-relation", tiled)
+    for seq, n in enumerate(copies):
+        assert_incidence(rows, seq, n, {1: 3 * n})
+
+    sizes = (1, 2, 4, 8)
+    rows = evaluate_trace("growing-path", [graph(n, [(i, i + 1) for i in range(1, n)])
+                                           for n in sizes])
+    for seq, degrees in enumerate(({0: 1}, {1: 2}, {1: 2, 2: 2}, {1: 2, 2: 6})):
+        assert_incidence(rows, seq, 1, degrees)
+
+    modular = graph(5, [(1, 1, 2), (3, 4), ()])
+    rows = evaluate_trace("frozen-modules", [graph(0, []), modular, modular])
+    assert_incidence(rows, 0, 0, {})
+    for seq in (1, 2):
+        assert_incidence(rows, seq, 3, {0: 1, 1: 3, 2: 1})
+        assert_value(rows, "relational.port_count.v1", seq, 5)
+
+    phases = [[0, 0, 1], [1, 0, 0], [0, 1, 0]]
+    oscillator = [cat(phases[i % 3]) for i in range(7)]
+    plain = evaluate_trace("period-three", oscillator, fixed_sites=True)
+    framed = evaluate_trace("period-three-framed", oscillator, fixed_sites=True, decorate=True)
+    for seq, lag in enumerate((0, 0, 3, 3, 3, 3), 1):
+        assert_value(plain, "state.recurrence_lag_snapshots.v1", seq, lag)
+        assert_value(plain, "state.changed_sites.v1", seq, 2)
+    first = metric(plain, "state.recurrence_lag_snapshots.v1", 0)
+    assert (first["value"], first["status"]) == ("", "insufficient_data")
+
+    def by_observation(rows):
+        return [{key: value for key, value in row.items() if key not in {"run_id", "sequence"}}
+                for row in rows]
+
+    assert by_observation(plain) == by_observation(framed)
+    return receipts
+
+
 def check(args, directory):
     assert crc32c(b"123456789") == 0xE3069283
     first = struct.pack("<4I", 0, 0, 1, 1)
@@ -478,6 +571,7 @@ def check(args, directory):
         "relational": check_relational(args, directory),
         "temporal": check_temporal(args, directory),
         "checkpoint_targets": check_checkpoint_targets(args, directory),
+        "tier0_panel": check_tier0_panel(args, directory),
     }
     assert result["categorical_sha256"] == "3dda44df0c60342ddd2b6456bbb350ea66a50141d86dc62ba4e887a0000fc9ba"
     assert result["events_sha256"] == "5f5e31d67be90e5eea677c262b01358df9cc2427ff86a17d975c44f4d34ddac1"
