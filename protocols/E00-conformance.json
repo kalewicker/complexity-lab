@@ -1,0 +1,15 @@
+{
+  "protocol": "E00-cross-platform-v1",
+  "scope": "engineering conformance of the current CLTR implementation and the existing five-case worker panel",
+  "hosts": ["Linux x86-64", "Linux arm64", "macOS arm64"],
+  "checks_per_host": [
+    "validate reported OS and architecture against the runner assignment",
+    "Release build and both CTest suites",
+    "ASan/UBSan build and both CTest suites using Clang",
+    "evaluator-only Release build and both CTest suites",
+    "install the evaluator-only build and build and run the separate CMake consumer",
+    "run independent trace and checkpoint fixtures against installed executables"
+  ],
+  "compatibility": "compare the four emitted worker trace or prefix digests with E00-worker-results.md; verify the existing fixtures and checkpoint target digest without changing case counts",
+  "limits": "the hosted images may change. This protocol covers the implemented wire format and fixture behavior on the tested images, with G0 still open for the remaining trace and fixture scope."
+}

@@ -1,0 +1,54 @@
+name: E00 conformance
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  conformance:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Linux x86-64
+            runner: ubuntu-24.04
+            kernel: Linux
+            arch: x86_64
+          - name: Linux arm64
+            runner: ubuntu-24.04-arm
+            kernel: Linux
+            arch: aarch64
+          - name: macOS arm64
+            runner: macos-15
+            kernel: Darwin
+            arch: arm64
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Verify runner and Linux crypto headers
+        shell: bash
+        env:
+          EXPECTED_KERNEL: ${{ matrix.kernel }}
+          EXPECTED_ARCH: ${{ matrix.arch }}
+        run: |
+          uname -srm
+          test "$(uname -s)" = "$EXPECTED_KERNEL"
+          test "$(uname -m)" = "$EXPECTED_ARCH"
+          if [[ "$EXPECTED_KERNEL" == Linux ]] &&
+             ! dpkg-query -W -f='${db:Status-Status}\n' libssl-dev 2>/dev/null | grep -qx installed; then
+            sudo apt-get update
+            sudo apt-get install -y --no-install-recommends libssl-dev
+          fi
+      - name: Build, test and verify installed evaluator
+        run: scripts/check-conformance.sh

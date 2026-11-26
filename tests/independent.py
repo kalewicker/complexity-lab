@@ -333,6 +333,13 @@ def check_worker_panel(args, directory):
         ("crash", 1, "failed", "signal", 3, "incomplete"),
         ("memory-cap", 0, "capped", "memory", None, "missing"),
     )
+    # Frozen in the macOS receipt in docs/E00-worker-results.md.
+    expected_digests = {
+        "work": "890dcb152bc02ec22bb4754fefbd69a6bea966239fbdc87df7d3c72110780ff1",
+        "completed": "98ad5e901b0e96ef29279dc7cc1073b94af79bd85a3b290d204e66f1149426d4",
+        "wall-cap": "f81de7a7abd230b6846ae7d9d7297323a07cca041916bada4ec87845e3cf7c0c",
+        "crash": "0ab5bdc3857c879cb044606b004a5c52195f897752aba0260ec8c191829bf92f",
+    }
     results = {}
     for scenario, exit_code, status, reason, last_work, trace_status in panel:
         output = directory / scenario
@@ -375,6 +382,7 @@ def check_worker_panel(args, directory):
             complete = trace_status == "complete"
             data = trace.read_bytes()
             row["trace_sha256"] = hashlib.sha256(data).hexdigest()
+            assert row["trace_sha256"] == expected_digests[scenario], row
             read_fixture_prefix(data, planned["run_id"], last_work, complete)
             index = list(csv.DictReader(io.StringIO(run(
                 args.inspect, "--index", "--recover-prefix", trace, code=0 if complete else 3,
@@ -388,8 +396,6 @@ def check_worker_panel(args, directory):
                 assert not run(args.inspect, trace, code=1)
         results[scenario] = row
 
-    mock = results["work"]
-    assert mock["trace_sha256"] == "890dcb152bc02ec22bb4754fefbd69a6bea966239fbdc87df7d3c72110780ff1"
     rows = list(csv.DictReader(io.StringIO(run(args.eval, directory / "work" / "trace.cltr"))))
     assert {row["run_id"] for row in rows} == {"mock-work-cap"}
     assert max(int(row["work"]) for row in rows if row["work"]) == 5

@@ -18,6 +18,12 @@ build/release/clab-eval build/demo/trace.cltr
 
 Choose a fresh directory for each fixture run. For traces containing checkpoint references, `clab-inspect --checkpoints TRACE.cltr` lists their format, size and SHA-256. Use `clab-inspect --verify-checkpoint SEQUENCE CHECKPOINT_FILE TRACE.cltr` to compare one reference against a local file. The demo records a tiny Rule 90 world under a five-sweep cap. Use `clab-fixture --scenario wall-cap NEW_OUTPUT_DIRECTORY` to exercise the watchdog, or `--scenario crash` to exercise a worker failure. In either case, the parent writes one terminal row to `status.csv`. Its trace path is relative to the output directory. For an incomplete trace, use `clab-inspect --recover-prefix` on that path. The initial configure fetches the pinned MIT-licensed nlohmann/json 3.11.3 header and verifies its SHA-256. For an offline configure, set `-DCLAB_JSON_HEADER=/path/to/json.hpp` to a verified copy. The evaluator needs only a trace at runtime.
 
+## Cross-platform conformance
+
+Run `scripts/check-conformance.sh` to build Release, ASan/UBSan and the substrate-free evaluator in a fresh directory under `build/`. The script installs the evaluator-only build, runs the external CMake consumer and checks the installed CLIs against independent fixtures. It uses Clang for the sanitizer build. Set `CLAB_SANITIZER_CXX` to choose a different compatible compiler.
+
+The [E00 conformance workflow](.github/workflows/conformance.yml) runs the script on Linux x86-64, Linux arm64 and macOS arm64. The [protocol](protocols/E00-conformance.json) defines the scope and acceptance checks.
+
 ## Install without substrates
 
 ```sh
