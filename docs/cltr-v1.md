@@ -105,6 +105,12 @@ Records have nondecreasing work within each batch and each event's work is at mo
 
 A nonzero u64 checkpoint byte length is followed by 32 bytes of SHA-256 digest, a u32 format identifier length and that many ASCII bytes. The identifier is 1–128 characters from letters, digits, period, underscore and hyphen. It names a producer-defined checkpoint format. The chunk stamp identifies the referenced boundary. The reference carries no storage path. Readers can validate its layout, while access to the target bytes is required to verify the length and digest or restore a producer's state.
 
+## Compatibility
+
+A 1.x minor revision preserves the existing header and chunk envelope, recognized field meanings, and the layout of each published type and version. A compatible addition may introduce metadata fields that a 1.0 reader can ignore, or optional chunks with the uncompressed envelope and the optional flag. Sequence numbers, timestamps, lengths, and CRC32C still apply to those chunks. Unknown required chunks or a different major fail closed. Producers that need older readers to accept a trace must use payload layouts those readers support. Type 4 version 2 remains required because skipping it would lose the relational observation.
+
+The compatibility surface is the wire contract and the published versioned diagnostic definitions. Platform-specific implementation details, archive formats for referenced checkpoints, and producer-defined encodings have separate contracts.
+
 ## Validation and index
 
 A complete trace has a checked end marker. Recovery exposes only the complete validated prefix of a trace cut short after valid metadata. Checksum failures remain errors in recovery mode. On supported local filesystems the writer stages in a unique adjacent directory and publishes by creating a hard link after closing the staged file. This atomically claims the destination without replacing an existing trace. The staging path remains available if publication fails. A process crash can leave a staging directory. The prototype makes no power-loss durability guarantee.

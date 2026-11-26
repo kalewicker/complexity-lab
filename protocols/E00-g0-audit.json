@@ -1,0 +1,13 @@
+{
+  "protocol": "E00-g0-audit-v1",
+  "candidate_base": "f06cbdd02c2dbf4bcacf713fc1083957f5775648",
+  "scope": "G0 engineering admission and the implemented public CLTR 1.0 wire contract",
+  "checks": {
+    "E00a": "previous fixture digests, semantic round trips for all current payload types, and an independent compatibility panel for a higher minor, optional unknown kind/version, required unknown kind/version, unknown major, and a corrupt skipped chunk",
+    "E00b": "existing CA replay and synthetic relational provider replay at seeds 0–9 and positions 0, 5 and 31 with 12-step continuations; observe without advancing the provider; equal API and trace-backed evaluation",
+    "E00c": "audit the substrate-enabled build graph and exported evaluator-only dependency edges, then run the installed external consumer and independent fixtures",
+    "E00d": "existing five-case worker panel, incomplete-prefix recovery, and terminal manifest reconciliation with pinned trace digests"
+  },
+  "acceptance": "all checks pass in the conformance matrix on Linux x86-64, Linux arm64 and macOS arm64 before reporting G0 passed",
+  "limits": "freeze only the documented CLTR 1.0 envelope and payload semantics. Stage 1 estimators and scientific admission are outside this protocol."
+}

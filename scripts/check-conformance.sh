@@ -15,7 +15,13 @@ python3 --version
 build_and_test() {
     local preset=$1
     local build_dir="$check_root/$preset"
-    cmake --preset "$preset" -B "$build_dir" -DCLAB_JSON_HEADER="$json_header"
+    if [[ "$preset" == release ]]; then
+        local links="$check_root/target-links.dot"
+        cmake --preset "$preset" -B "$build_dir" -DCLAB_JSON_HEADER="$json_header"             --graphviz="$links"
+        python3 tests/check_links.py "$links"
+    else
+        cmake --preset "$preset" -B "$build_dir" -DCLAB_JSON_HEADER="$json_header"
+    fi
     cmake --build "$build_dir" --parallel "$jobs"
     ctest --test-dir "$build_dir" --output-on-failure
 }

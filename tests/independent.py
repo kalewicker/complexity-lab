@@ -31,8 +31,8 @@ def crc32c(data):
     return crc ^ 0xFFFFFFFF
 
 
-def metadata_header(data):
-    return struct.pack("<4sHHII", b"CLTR", 1, 0, 0x01020304, len(data)) + data
+def metadata_header(data, major=1, minor=0):
+    return struct.pack("<4sHHII", b"CLTR", major, minor, 0x01020304, len(data)) + data
 
 
 def header(meta=META):
@@ -667,6 +667,54 @@ def check_attributes(args, directory):
     }
 
 
+def check_wire_compatibility(args, directory):
+    metadata = json.dumps(META, separators=(",", ":")).encode()
+    future_metadata = json.dumps(META | {"future_hint": "optional"},
+                                 separators=(",", ":")).encode()
+    past = struct.pack("<2I", 0, 1)
+    later = struct.pack("<2I", 1, 0)
+    first = chunk(1, 0, 0, 0, past)
+    baseline = metadata_header(metadata) + first + chunk(1, 1, 1, 1, later) + chunk(0, 2, 1, 1)
+    new_prefix = metadata_header(future_metadata, minor=1)
+    add_kind = chunk(85, 1, 0, 0, b"additional kind", flags=1)
+    add_version = chunk(1, 2, 0, 0, b"additional version", flags=1, version=2)
+    extended = (new_prefix + first + add_kind + add_version
+                + chunk(1, 3, 1, 1, later) + chunk(0, 4, 1, 1))
+    trace = directory / "minor-compatibility.cltr"
+
+    def observations(data):
+        trace.write_bytes(data)
+        rows = csv.DictReader(io.StringIO(run(args.eval, trace)))
+        return [{key: value for key, value in row.items() if key != "sequence"} for row in rows]
+
+    assert observations(baseline) == observations(extended)
+    assert json.loads(run(args.inspect, "--metadata", trace)) == META
+    index = csv.DictReader(io.StringIO(run(args.inspect, "--index", trace)))
+    assert [(row["sequence"], row["type"], row["version"], row["flags"]) for row in index] == [
+        ("0", "1", "1", "0"), ("1", "85", "1", "1"), ("2", "1", "2", "1"),
+        ("3", "1", "1", "0"), ("4", "0", "1", "0"),
+    ]
+
+    bad_kind = chunk(85, 1, 0, 0, b"required kind")
+    bad_version = chunk(1, 1, 0, 0, b"required version", version=2)
+    corrupt = add_kind[:-1] + bytes([add_kind[-1] ^ 1])
+    for label, data in (
+        ("unknown required kind", new_prefix + first + bad_kind + chunk(0, 2, 0, 0)),
+        ("unknown required version", new_prefix + first + bad_version + chunk(0, 2, 0, 0)),
+        ("wrong major", metadata_header(metadata, major=2) + first + chunk(0, 1, 0, 0)),
+        ("corrupt optional kind", new_prefix + first + corrupt + chunk(0, 2, 0, 0)),
+    ):
+        trace.write_bytes(data)
+        assert not run(args.inspect, "--metadata", "--recover-prefix", trace, code=1), label
+
+    return {
+        "baseline_sha256": hashlib.sha256(baseline).hexdigest(),
+        "extended_sha256": hashlib.sha256(extended).hexdigest(),
+        "optional_chunks_skipped": 2,
+        "incompatible_or_corrupt_rejected": 4,
+    }
+
+
 def check(args, directory):
     assert crc32c(b"123456789") == 0xE3069283
     first = struct.pack("<4I", 0, 0, 1, 1)
@@ -745,6 +793,7 @@ def check(args, directory):
         "tier0_panel": check_tier0_panel(args, directory),
         "provenance": check_provenance(args, directory),
         "attributes": check_attributes(args, directory),
+        "wire_compatibility": check_wire_compatibility(args, directory),
     }
     assert result["categorical_sha256"] == "3dda44df0c60342ddd2b6456bbb350ea66a50141d86dc62ba4e887a0000fc9ba"
     assert result["events_sha256"] == "5f5e31d67be90e5eea677c262b01358df9cc2427ff86a17d975c44f4d34ddac1"
