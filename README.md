@@ -40,6 +40,8 @@ python3 tests/independent.py --eval build/install/bin/clab-eval --inspect build/
 
 Applications can link to `clab::trace` and `clab::evaluator` through `find_package(CLab CONFIG REQUIRED)`. Custom providers can implement the observation interface or emit the documented binary format.
 
+For attributed relational traces, `clab-inspect --metadata` lists the schema and `clab-inspect --attributes` lists the slots.
+
 - [CLTR draft format and metric definitions](docs/cltr-v1.md)
 - [Initial verification protocol](protocols/E00-initial.json)
 - [Initial verification](docs/E00-initial-results.md)
@@ -49,3 +51,4 @@ Applications can link to `clab::trace` and `clab::evaluator` through `find_packa
 - [Worker watchdog and crash reconciliation](docs/E00-worker-results.md)
 - [Tier-0 structural fixture checks](docs/E01-tier0-fixtures.md)
 - [Typed trace provenance verification](docs/E00-provenance-results.md)
+- [Relational attribute verification](docs/E00-attributes-results.md)

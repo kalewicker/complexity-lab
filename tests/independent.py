@@ -576,6 +576,97 @@ def check_provenance(args, directory):
     }
 
 
+def check_attributes(args, directory):
+    schema = [
+        {"owner": "entity", "name": "phase", "kind": "categorical", "required": True,
+         "labels": ["idle", "active"]},
+        {"owner": "relation", "name": "length", "kind": "continuous", "required": True,
+         "unit": "m", "lower": 0, "upper": 10, "resolution": 0.125},
+        {"owner": "entity", "name": "energy", "kind": "continuous", "required": False,
+         "unit": "J", "lower": -4, "upper": 4, "resolution": 0.25},
+    ]
+    declared = META | {"relational_attributes": schema}
+    topology = relational_payload([(30, 1), (9, 2)], [(4, 1, 0, 2, 1)], [(30, 0), (9, 1)])
+    empty = relational_payload([], [], [])
+    slots = (struct.pack("<BQ", 1, 1), struct.pack("<BQ", 1, 0),
+             struct.pack("<Bd", 1, 1.75), bytes(9), struct.pack("<Bd", 1, -2.25))
+    prefix = header(declared)
+    payload = topology + b"".join(slots)
+    records = chunk(4, 0, 0, 0, payload, version=2) + chunk(4, 1, 1, 1, empty, version=2)
+    end = chunk(0, 2, 1, 1)
+    data = prefix + records + end
+    trace = directory / "attributes.cltr"
+    trace.write_bytes(data)
+    attrs = list(csv.DictReader(io.StringIO(run(args.inspect, "--attributes", trace))))
+    expected = [
+        ("0", "0", "entity", "30", "1", "present"),
+        ("0", "0", "entity", "9", "0", "present"),
+        ("0", "1", "relation", "4", "1.75", "present"),
+        ("0", "2", "entity", "30", "", "missing"),
+        ("0", "2", "entity", "9", "-2.25", "present"),
+    ]
+    fields = ("sequence", "column", "owner", "owner_id", "value", "status")
+    assert [tuple(row[field] for field in fields) for row in attrs] == expected, attrs
+    assert json.loads(run(args.inspect, "--metadata", trace)) == declared
+    index = csv.DictReader(io.StringIO(run(args.inspect, "--index", trace)))
+    assert [(row["type"], row["version"], row["flags"]) for row in index] == [
+        ("4", "2", "0"), ("4", "2", "0"), ("0", "1", "0"),
+    ]
+    actual = run(args.eval, trace)
+    trace.write_bytes(header() + chunk(4, 0, 0, 0, topology) + chunk(4, 1, 1, 1, empty) + end)
+    assert run(args.eval, trace) == actual
+    assert not list(csv.DictReader(io.StringIO(run(args.inspect, "--attributes", trace))))
+
+    def replace_slot(index, replacement):
+        modified = list(slots)
+        modified[index] = replacement
+        return topology + b"".join(modified)
+
+    first_end = chunk(0, 1, 0, 0)
+    malformed = [
+        prefix + chunk(4, 0, 0, 0, topology),
+        header() + chunk(4, 0, 0, 0, payload, version=2),
+        prefix + chunk(4, 0, 0, 0, payload, version=2, flags=1),
+    ]
+    for body in (
+        payload[:-1], payload + b"X",
+        replace_slot(0, struct.pack("<BQ", 2, 1)),
+        replace_slot(3, struct.pack("<BQ", 0, 1)),
+        replace_slot(0, bytes(9)),
+        replace_slot(0, struct.pack("<BQ", 1, 2)),
+        replace_slot(0, struct.pack("<BQ", 1, 2**32)),
+        replace_slot(2, struct.pack("<Bd", 1, 11.0)),
+        replace_slot(2, struct.pack("<Bd", 1, float("nan"))),
+        replace_slot(4, struct.pack("<Bd", 1, float("inf"))),
+    ):
+        malformed.append(prefix + chunk(4, 0, 0, 0, body, version=2))
+
+    for bad_schema in (
+        [], {}, schema + [schema[0]],
+        [schema[0] | {"labels": ["idle", "idle"]}],
+        [schema[0] | {"labels": []}],
+        [schema[0] | {"labels": {"0": "idle"}}],
+        [schema[0] | {"owner": "port"}],
+        [schema[0] | {"required": 1}],
+        [schema[1] | {"unit": ""}],
+        [schema[1] | {"lower": 11}],
+        [schema[1] | {"resolution": 0}],
+        [schema[1] | {"resolution": "0.125"}],
+    ):
+        malformed.append(header(META | {"relational_attributes": bad_schema})
+                         + chunk(4, 0, 0, 0, payload, version=2))
+
+    for invalid in malformed:
+        trace.write_bytes(invalid + first_end)
+        rejected = run(args.inspect, "--index", "--recover-prefix", trace, code=1)
+        assert not list(csv.DictReader(io.StringIO(rejected))), rejected
+    return {
+        "trace_sha256": hashlib.sha256(data).hexdigest(),
+        "slot_count": len(expected),
+        "malformed_rejected": len(malformed),
+    }
+
+
 def check(args, directory):
     assert crc32c(b"123456789") == 0xE3069283
     first = struct.pack("<4I", 0, 0, 1, 1)
@@ -653,6 +744,7 @@ def check(args, directory):
         "checkpoint_targets": check_checkpoint_targets(args, directory),
         "tier0_panel": check_tier0_panel(args, directory),
         "provenance": check_provenance(args, directory),
+        "attributes": check_attributes(args, directory),
     }
     assert result["categorical_sha256"] == "3dda44df0c60342ddd2b6456bbb350ea66a50141d86dc62ba4e887a0000fc9ba"
     assert result["events_sha256"] == "5f5e31d67be90e5eea677c262b01358df9cc2427ff86a17d975c44f4d34ddac1"

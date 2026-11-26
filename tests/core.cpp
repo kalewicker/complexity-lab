@@ -187,6 +187,43 @@ void provenance_round_trip(const std::filesystem::path& directory) {
     require(!reader.next() && reader.status() == clab::TraceStatus::complete, "provenance end");
 }
 
+void attribute_round_trip(const std::filesystem::path& directory) {
+    const auto path = directory / "attributed.cltr";
+    using clab::AttributeOwner;
+    const std::array<clab::EntityRow, 2> entities{{{9, 1}, {30, 1}}};
+    const std::vector<clab::AttributeDescriptor> schema{
+        {AttributeOwner::entity, "phase", true, clab::CategoricalAttribute{{"idle", "active"}}},
+        {AttributeOwner::entity, "energy", false, clab::ContinuousAttribute{"J", -4, 4, 0.125}},
+    };
+    const std::vector<clab::AttributeColumn> values{
+        {clab::AttributeValue(std::uint32_t{1}), clab::AttributeValue(std::uint32_t{0})},
+        {clab::AttributeValue(-2.25), std::nullopt},
+    };
+    const clab::RelationalSnapshot snapshot(entities, {}, {}, values, schema);
+    const clab::Metadata meta{"attributed", "test", "step", true, false, std::nullopt, schema};
+    clab::TraceWriter writer(path, meta);
+    auto renamed = schema;
+    renamed.front().name = "phase-other";
+    const clab::RelationalSnapshot mismatched(entities, {}, {}, values, renamed);
+    expect_error(clab::ErrorCode::invalid, [&] { writer.append({{}, mismatched}); });
+    auto invalid_values = values;
+    invalid_values[0][1] = 1.0;
+    expect_error(clab::ErrorCode::invalid, [&] {
+        (void)clab::RelationalSnapshot(entities, {}, {}, invalid_values, schema);
+    });
+    writer.append({{}, snapshot});
+    writer.finish();
+
+    clab::TraceReader reader(path);
+    require(reader.metadata() == meta, "attribute schema round trip");
+    const auto record = reader.next();
+    require(record.has_value(), "missing attributed snapshot");
+    const auto& graph = std::get<clab::RelationalSnapshot>(record->payload);
+    require(std::ranges::equal(graph.attributes(), values), "attribute value round trip");
+    require(std::ranges::equal(graph.attribute_schema(), schema), "snapshot schema round trip");
+    require(!reader.next() && reader.status() == clab::TraceStatus::complete, "attributed end");
+}
+
 #ifdef CLAB_TEST_SUBSTRATES
 void replay() {
     expect_error(clab::ErrorCode::limit, [] { clab::BinaryCa world(9, 0, 71); });
@@ -221,6 +258,7 @@ int main() {
         relational_round_trip(temp.path);
         temporal_round_trip(temp.path);
         provenance_round_trip(temp.path);
+        attribute_round_trip(temp.path);
 #ifdef CLAB_TEST_SUBSTRATES
         replay();
 #endif

@@ -36,7 +36,7 @@ Seed zero is an explicit value. Use a JSON parser that preserves 64-bit unsigned
 | Field | Size | Value |
 |---|---:|---|
 | Type | 2 | Payload identifier |
-| Version | 2 | 1 for the types below |
+| Version | 2 | 1 for existing payload layouts. Type 4 also supports version 2 |
 | Flags | 4 | Bit 0 marks a skippable type or version. All other bits reserved |
 | Sequence | 8 | Contiguous from zero, including skipped chunks and end |
 | Simulated time | 8 | Finite, nonnegative and nondecreasing |
@@ -60,7 +60,7 @@ An unknown major version or required chunk fails validation. Compatible minor ve
 
 Readers that lack support for an emitted required chunk reject it. Existing chunk layouts are unchanged.
 
-### Type 4 payload
+### Type 4 version 1 payload
 
 Three u32 counts give the number of entities, relations and ports. The counts are followed by the three row arrays, in that order. The payload length must equal `12 + 12*entities + 24*relations + 12*ports`.
 
@@ -71,6 +71,16 @@ Three u32 counts give the number of entities, relations and ports. The counts ar
 | Port | u64 entity ID, u32 role |
 
 IDs are nonzero and unique within their respective entity or relation table. Every port references an entity in the snapshot. Relation port ranges partition the port table in row order, starting at index zero. Zero-port relations and repeated endpoints are allowed. Relation flag bit 0 marks ordered ports. All other bits must be zero. Role values and type codes derive their meaning from the producer's encoding. The wire order, roles and IDs are preserved when reading. The format carries no attributes in this payload version.
+
+### Type 4 version 2 payload
+
+Version 2 reuses the version 1 topology layout, then appends one dense attribute column for each descriptor in the top-level `relational_attributes` metadata array. This array is omitted when there are no descriptors. A nonempty array requires version 2 for every type 4 chunk. Version 2 requires a nonempty array and zero envelope flags. A reader that only supports version 1 rejects the required newer payload.
+
+Descriptors have a nonempty `name`, `owner` of `entity` or `relation`, a Boolean `required`, and a `kind`. Names must be unique for each owner kind. A categorical descriptor has `kind: "categorical"` and a nonempty `labels` array of distinct nonempty strings. The zero-based index is the category code. A continuous descriptor has `kind: "continuous"`, a nonempty `unit`, finite `lower` and `upper` bounds with `lower <= upper`, and a finite positive `resolution` in the same unit. Resolution describes the intended measurement precision. The decoder checks bounds and finiteness without rounding values or enforcing a quantization grid.
+
+Columns appear in descriptor order. A column has exactly one slot per row of its owner table, in that table's order. Each slot has a one-byte presence tag and eight little-endian bytes. Tag zero means missing, requires zero padding, and is legal only for optional columns. Tag one means present. For a categorical column, the eight bytes carry a u32 code zero-extended to u64. For a continuous column, they carry IEEE 754 binary64. Other tags, out-of-range codes, and nonfinite or out-of-bounds values fail validation. A column with no owners contributes no bytes.
+
+The payload length is the version 1 topology length plus nine bytes per slot. The reader validates this length against the schema and row counts before allocating arrays. Attribute descriptors and values are preserved on the relational snapshot. Tier-0 topology diagnostics use the entity, relation and port tables.
 
 ### Type 5 payload
 
@@ -106,6 +116,8 @@ A complete trace has a checked end marker. Recovery exposes only the complete va
 `clab-inspect --verify-checkpoint SEQUENCE CHECKPOINT_FILE TRACE.cltr` first validates the complete trace and selects the reference by chunk sequence. It then checks the explicitly supplied regular file. Verification streams through a 64 KiB buffer and reports success only when the byte count and SHA-256 both match. Argument errors exit 2. Invalid traces, missing references and target mismatches exit 1. A successful match establishes the identity of the bytes read against the reference. Checkpoint trust, decoding and state restore belong to the producer's workflow.
 
 `clab-inspect --metadata TRACE.cltr` emits the recognized header fields as JSON after validating the trace. Unknown extensions are omitted from this normalized view. With `--recover-prefix`, exit 3 indicates that the header is valid and the remaining chunks form an incomplete prefix. On a strict read, an incomplete or invalid trace produces no metadata output.
+
+`clab-inspect --attributes TRACE.cltr` streams relational attribute slots as CSV with sequence, zero-based schema column, owner kind, owner ID, value and status. Pair column numbers with the descriptors from `--metadata`. Missing slots have an empty value and status `missing`. Categorical values are numeric codes. Continuous values use enough digits to round-trip a binary64 value. As with the index, check the exit status before using the CSV.
 
 ## Tier 0 output
 

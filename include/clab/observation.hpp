@@ -35,6 +35,32 @@ struct TraceProvenance {
     bool operator==(const TraceProvenance&) const = default;
 };
 
+enum class AttributeOwner { entity, relation };
+
+struct CategoricalAttribute {
+    std::vector<std::string> labels;
+    bool operator==(const CategoricalAttribute&) const = default;
+};
+
+struct ContinuousAttribute {
+    std::string unit;
+    double lower{}, upper{}, resolution{};
+    bool operator==(const ContinuousAttribute&) const = default;
+};
+
+struct AttributeDescriptor {
+    AttributeOwner owner{};
+    std::string name;
+    bool required{};
+    std::variant<CategoricalAttribute, ContinuousAttribute> domain;
+    bool operator==(const AttributeDescriptor&) const = default;
+};
+
+using AttributeValue = std::variant<std::uint32_t, double>;
+using AttributeColumn = std::vector<std::optional<AttributeValue>>;
+
+void validate_attribute_schema(std::span<const AttributeDescriptor> schema);
+
 struct Metadata {
     std::string run_id;
     std::string encoding;
@@ -42,6 +68,7 @@ struct Metadata {
     bool exact{};
     bool fixed_sites{};
     std::optional<TraceProvenance> provenance{};
+    std::vector<AttributeDescriptor> relational_attributes{};
     bool operator==(const Metadata&) const = default;
 };
 
@@ -83,18 +110,28 @@ class RelationalSnapshot {
 public:
     RelationalSnapshot(std::span<const EntityRow> entities,
                        std::span<const RelationRow> relations,
-                       std::span<const PortRow> ports);
+                       std::span<const PortRow> ports,
+                       std::span<const AttributeColumn> attributes = {},
+                       std::span<const AttributeDescriptor> schema = {});
     [[nodiscard]] std::span<const EntityRow> entities() const & { return entities_; }
     [[nodiscard]] std::span<const RelationRow> relations() const & { return relations_; }
     [[nodiscard]] std::span<const PortRow> ports() const & { return ports_; }
     std::span<const EntityRow> entities() const && = delete;
     std::span<const RelationRow> relations() const && = delete;
     std::span<const PortRow> ports() const && = delete;
+    [[nodiscard]] std::span<const AttributeColumn> attributes() const & { return attributes_; }
+    std::span<const AttributeColumn> attributes() const && = delete;
+    [[nodiscard]] std::span<const AttributeDescriptor> attribute_schema() const & { return schema_; }
+    std::span<const AttributeDescriptor> attribute_schema() const && = delete;
 
 private:
     std::vector<EntityRow> entities_;
     std::vector<RelationRow> relations_;
     std::vector<PortRow> ports_;
+    std::vector<AttributeColumn> attributes_;
+    std::vector<AttributeDescriptor> schema_;
+
+    void validate_attributes() const;
 };
 
 struct EventCounts {

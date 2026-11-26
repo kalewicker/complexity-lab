@@ -11,7 +11,7 @@
 #include <utility>
 
 namespace {
-enum class Output { summary, index, checkpoints, metadata };
+enum class Output { summary, index, checkpoints, metadata, attributes };
 
 int verify_checkpoint(std::string_view sequence_arg, const std::filesystem::path& target,
                       const std::filesystem::path& trace_path) {
@@ -43,8 +43,27 @@ int verify_checkpoint(std::string_view sequence_arg, const std::filesystem::path
     return 0;
 }
 
+void print_attributes(const clab::RelationalSnapshot& graph, const clab::Stamp& stamp) {
+    const auto schema = graph.attribute_schema();
+    for (std::size_t i = 0; i < schema.size(); ++i) {
+        const bool entity = schema[i].owner == clab::AttributeOwner::entity;
+        const auto& column = graph.attributes()[i];
+        for (std::size_t row = 0; row < column.size(); ++row) {
+            const auto id = entity ? graph.entities()[row].id : graph.relations()[row].id;
+            std::cout << stamp.sequence << ',' << i << ',' << (entity ? "entity" : "relation")
+                      << ',' << id << ',';
+            if (const auto& slot = column[row]) {
+                std::visit([](const auto value) { std::cout << value; }, *slot);
+                std::cout << ",present\n";
+            } else {
+                std::cout << ",missing\n";
+            }
+        }
+    }
+}
+
 void usage() {
-    std::cerr << "usage: clab-inspect [--recover-prefix] [--index|--checkpoints|--metadata] TRACE.cltr\n"
+    std::cerr << "usage: clab-inspect [--recover-prefix] [--index|--checkpoints|--metadata|--attributes] TRACE.cltr\n"
               << "       clab-inspect --verify-checkpoint SEQUENCE CHECKPOINT_FILE TRACE.cltr\n";
 }
 }
@@ -75,6 +94,8 @@ int main(int argc, char** argv) {
             output = Output::checkpoints;
         } else if (flag == "--metadata" && output == Output::summary) {
             output = Output::metadata;
+        } else if (flag == "--attributes" && output == Output::summary) {
+            output = Output::attributes;
         } else {
             break;
         }
@@ -100,6 +121,10 @@ int main(int argc, char** argv) {
         clab::TraceReader trace(argv[arg], mode, {}, std::move(sink));
         if (output == Output::checkpoints) {
             std::cout << "sequence,work,format,size_bytes,sha256\n";
+        } else if (output == Output::attributes) {
+            std::cout.imbue(std::locale::classic());
+            std::cout << std::setprecision(std::numeric_limits<double>::max_digits10)
+                      << "sequence,column,owner,owner_id,value,status\n";
         }
         std::uint64_t records = 0;
         while (auto record = trace.next()) {
@@ -113,6 +138,10 @@ int main(int argc, char** argv) {
                         std::cout << hex[byte >> 4] << hex[byte & 0xf];
                     }
                     std::cout << '\n';
+                }
+            } else if (output == Output::attributes) {
+                if (const auto* graph = std::get_if<clab::RelationalSnapshot>(&record->payload)) {
+                    print_attributes(*graph, record->stamp);
                 }
             }
         }

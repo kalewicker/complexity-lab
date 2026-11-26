@@ -1,0 +1,12 @@
+{
+  "protocol": "E00-relational-attributes-v1",
+  "scope": "typed entity and relation attribute columns in CLTR type 4 payload version 2",
+  "checks": {
+    "round_trip": "preserve categorical and binary64 values, explicit missing values, units, bounds and declared resolution",
+    "independent": "read a Python-authored two-entity, one-relation fixture with three attribute columns; inspect exact slot values and unchanged topology diagnostics",
+    "rejection": "reject malformed schemas, schema/version mismatches, wrong payload lengths, invalid presence codes, missing required values, unknown categories, and out-of-range or nonfinite reals",
+    "compatibility": "preserve all earlier version 1 fixture bytes and diagnostics; version 2 is required so older readers cannot silently discard attributes",
+    "install": "run existing release, sanitizer and substrate-free conformance on all three supported hosts"
+  },
+  "limits": "attribute preservation and validation only; resolution is a declaration and attributes do not enter tier-0 diagnostics"
+}

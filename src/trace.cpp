@@ -26,6 +26,8 @@ constexpr std::uint16_t snapshot_type = 1;
 constexpr std::uint16_t events_type = 2;
 constexpr std::uint16_t ledger_type = 3;
 constexpr std::uint16_t relational_type = 4;
+constexpr std::uint16_t attributed_version = 2;
+constexpr std::size_t attribute_slot_bytes = 9;
 constexpr std::uint16_t event_batch_type = 5;
 constexpr std::uint16_t checkpoint_type = 6;
 constexpr std::size_t event_header_bytes = 40;
@@ -125,6 +127,70 @@ TraceProvenance parse_provenance(const Json& obj) {
     return value;
 }
 
+std::vector<AttributeDescriptor> parse_attribute_schema(const Json& obj) {
+    if (!obj.is_array() || obj.empty()) {
+        throw Error(ErrorCode::invalid, "expected nonempty relational attribute schema array");
+    }
+    std::vector<AttributeDescriptor> schema;
+    for (const auto& item : obj) {
+        AttributeDescriptor field;
+        const auto owner = item.at("owner").get<std::string>();
+        if (owner == "entity") {
+            field.owner = AttributeOwner::entity;
+        } else if (owner == "relation") {
+            field.owner = AttributeOwner::relation;
+        } else {
+            throw Error(ErrorCode::invalid, "invalid attribute owner");
+        }
+        field.name = item.at("name").get<std::string>();
+        field.required = item.at("required").get<bool>();
+        const auto kind = item.at("kind").get<std::string>();
+        if (kind == "categorical") {
+            const auto& labels = item.at("labels");
+            if (!labels.is_array()) {
+                throw Error(ErrorCode::invalid, "attribute labels must be an array");
+            }
+            field.domain = CategoricalAttribute{labels.get<std::vector<std::string>>()};
+        } else if (kind == "continuous") {
+            const auto number = [&](const char* key) {
+                const auto& value = item.at(key);
+                if (!value.is_number()) {
+                    throw Error(ErrorCode::invalid, "attribute domain requires a number");
+                }
+                return value.get<double>();
+            };
+            field.domain = ContinuousAttribute{item.at("unit").get<std::string>(), number("lower"),
+                                               number("upper"), number("resolution")};
+        } else {
+            throw Error(ErrorCode::invalid, "unsupported attribute kind");
+        }
+        schema.push_back(std::move(field));
+    }
+    validate_attribute_schema(schema);
+    return schema;
+}
+
+Json encode_attribute_schema(std::span<const AttributeDescriptor> schema) {
+    Json rows = Json::array();
+    for (const auto& field : schema) {
+        Json row{{"owner", field.owner == AttributeOwner::entity ? "entity" : "relation"},
+                 {"name", field.name}, {"required", field.required}};
+        if (const auto* categorical = std::get_if<CategoricalAttribute>(&field.domain)) {
+            row["kind"] = "categorical";
+            row["labels"] = categorical->labels;
+        } else {
+            const auto& real = std::get<ContinuousAttribute>(field.domain);
+            row["kind"] = "continuous";
+            row["unit"] = real.unit;
+            row["lower"] = real.lower;
+            row["upper"] = real.upper;
+            row["resolution"] = real.resolution;
+        }
+        rows.push_back(std::move(row));
+    }
+    return rows;
+}
+
 Metadata parse_metadata(const Bytes& bytes) {
     try {
         std::array<std::set<std::string>, metadata_max_depth + 1> keys;
@@ -147,6 +213,9 @@ Metadata parse_metadata(const Bytes& bytes) {
                        obj.at("exact").get<bool>(), obj.at("fixed_sites").get<bool>()};
         if (const auto provenance = obj.find("provenance"); provenance != obj.end()) {
             value.provenance = parse_provenance(*provenance);
+        }
+        if (const auto schema = obj.find("relational_attributes"); schema != obj.end()) {
+            value.relational_attributes = parse_attribute_schema(*schema);
         }
         validate_metadata(value);
         return value;
@@ -198,20 +267,31 @@ void validate_ledger(const WorkLedger& value) {
     }
 }
 
-std::uint64_t relational_size(std::uint64_t entities, std::uint64_t relations, std::uint64_t ports) {
-    auto size = checked_add(relational_prefix, checked_multiply(entities, entity_row_bytes));
-    size = checked_add(size, checked_multiply(relations, relation_row_bytes));
-    return checked_add(size, checked_multiply(ports, port_row_bytes));
+std::size_t owner_count(AttributeOwner owner, std::size_t entities, std::size_t relations) {
+    return owner == AttributeOwner::entity ? entities : relations;
 }
 
-RelationalSnapshot decode_relational(const Bytes& bytes) {
+std::uint64_t relational_size(std::uint64_t entities, std::uint64_t relations, std::uint64_t ports,
+                              std::span<const AttributeDescriptor> schema) {
+    auto size = checked_add(relational_prefix, checked_multiply(entities, entity_row_bytes));
+    size = checked_add(size, checked_multiply(relations, relation_row_bytes));
+    size = checked_add(size, checked_multiply(ports, port_row_bytes));
+    for (const auto& field : schema) {
+        size = checked_add(size, checked_multiply(owner_count(field.owner, entities, relations),
+                                                 attribute_slot_bytes));
+    }
+    return size;
+}
+
+RelationalSnapshot decode_relational(const Bytes& bytes,
+                                     std::span<const AttributeDescriptor> schema) {
     if (bytes.size() < relational_prefix) {
         throw Error(ErrorCode::invalid, "short relational snapshot prefix");
     }
     const auto entity_count = get<std::uint32_t>(bytes, 0);
     const auto relation_count = get<std::uint32_t>(bytes, 4);
     const auto port_count = get<std::uint32_t>(bytes, 8);
-    if (bytes.size() != relational_size(entity_count, relation_count, port_count)) {
+    if (bytes.size() != relational_size(entity_count, relation_count, port_count, schema)) {
         throw Error(ErrorCode::invalid, "invalid relational snapshot length");
     }
     std::vector<EntityRow> entities;
@@ -236,14 +316,40 @@ RelationalSnapshot decode_relational(const Bytes& bytes) {
     for (std::uint32_t i = 0; i < port_count; ++i, offset += port_row_bytes) {
         ports.push_back({get<EntityId>(bytes, offset), get<std::uint32_t>(bytes, offset + 8)});
     }
-    return RelationalSnapshot(entities, relations, ports);
+    std::vector<AttributeColumn> attributes;
+    attributes.reserve(schema.size());
+    for (const auto& field : schema) {
+        auto& column = attributes.emplace_back();
+        const auto count = owner_count(field.owner, entity_count, relation_count);
+        const bool categorical = std::holds_alternative<CategoricalAttribute>(field.domain);
+        column.reserve(count);
+        for (std::size_t i = 0; i < count; ++i, offset += attribute_slot_bytes) {
+            const auto present = bytes[offset];
+            const auto bits = get<std::uint64_t>(bytes, offset + 1);
+            if (present > 1 || (!present && bits != 0)) {
+                throw Error(ErrorCode::invalid, "invalid relational attribute presence or padding");
+            }
+            if (!present) {
+                column.emplace_back(std::nullopt);
+            } else if (categorical) {
+                if (bits > std::numeric_limits<std::uint32_t>::max()) {
+                    throw Error(ErrorCode::invalid, "relational category code out of range");
+                }
+                column.emplace_back(static_cast<std::uint32_t>(bits));
+            } else {
+                column.emplace_back(std::bit_cast<double>(bits));
+            }
+        }
+    }
+    return RelationalSnapshot(entities, relations, ports, attributes, schema);
 }
 
 Bytes encode_relational(const RelationalSnapshot& snapshot, std::uint32_t chunk_limit) {
     const auto entities = snapshot.entities();
     const auto relations = snapshot.relations();
     const auto ports = snapshot.ports();
-    const auto size = relational_size(entities.size(), relations.size(), ports.size());
+    const auto size = relational_size(entities.size(), relations.size(), ports.size(),
+                                      snapshot.attribute_schema());
     if (size > chunk_limit) {
         throw Error(ErrorCode::limit, "relational snapshot byte cap exceeded");
     }
@@ -266,6 +372,20 @@ Bytes encode_relational(const RelationalSnapshot& snapshot, std::uint32_t chunk_
     for (const auto& row : ports) {
         put(bytes, row.entity);
         put(bytes, row.role);
+    }
+    for (const auto& column : snapshot.attributes()) {
+        for (const auto& slot : column) {
+            bytes.push_back(slot.has_value() ? 1 : 0);
+            std::uint64_t bits = 0;
+            if (slot) {
+                if (const auto* code = std::get_if<std::uint32_t>(&*slot)) {
+                    bits = *code;
+                } else {
+                    bits = std::bit_cast<std::uint64_t>(std::get<double>(*slot));
+                }
+            }
+            put(bytes, bits);
+        }
     }
     return bytes;
 }
@@ -408,6 +528,7 @@ Bytes encode_checkpoint_ref(const CheckpointRef& ref) {
 
 std::string encode_metadata_json(const Metadata& metadata) {
     validate_metadata(metadata);
+    validate_attribute_schema(metadata.relational_attributes);
     try {
         Json obj{{"run_id", metadata.run_id}, {"encoding", metadata.encoding},
                  {"time_unit", metadata.time_unit}, {"exact", metadata.exact},
@@ -431,6 +552,9 @@ std::string encode_metadata_json(const Metadata& metadata) {
                 fields["seed"] = *value.seed;
             }
             obj["provenance"] = std::move(fields);
+        }
+        if (!metadata.relational_attributes.empty()) {
+            obj["relational_attributes"] = encode_attribute_schema(metadata.relational_attributes);
         }
         return obj.dump();
     } catch (const Json::exception&) {
@@ -545,7 +669,8 @@ std::optional<ObservationRecord> TraceReader::next() {
                 throw Error(ErrorCode::invalid, "chunk checksum mismatch");
             }
             const ChunkIndexEntry entry{stamp, reader.next_offset, type, version, flags, size, crc};
-            if (type > checkpoint_type || version != 1) {
+            const bool attributed = type == relational_type && version == attributed_version;
+            if (type > checkpoint_type || (version != 1 && !attributed)) {
                 if (type != end_type && (flags & optional_chunk)) {
                     reader.accept(entry);
                     continue;
@@ -603,7 +728,11 @@ std::optional<ObservationRecord> TraceReader::next() {
                 return ObservationRecord{stamp, ledger};
             }
             case relational_type: {
-                ObservationRecord record{stamp, decode_relational(bytes)};
+                const auto& schema = reader.meta.relational_attributes;
+                if (attributed != !schema.empty() || (attributed && (flags & optional_chunk))) {
+                    throw Error(ErrorCode::invalid, "relational attribute schema or version mismatch");
+                }
+                ObservationRecord record{stamp, decode_relational(bytes, schema)};
                 reader.accept(entry);
                 return record;
             }
@@ -627,7 +756,7 @@ std::optional<ObservationRecord> TraceReader::next() {
 
 struct TraceWriter::Impl {
     Impl(const std::filesystem::path& path, const Metadata& meta, TraceLimits chosen_limits)
-        : destination(path), limits(chosen_limits) {
+        : destination(path), limits(chosen_limits), relational_attributes(meta.relational_attributes) {
         const auto json = encode_metadata_json(meta);
         if (json.size() > limits.metadata_bytes) {
             throw Error(ErrorCode::limit, "metadata byte cap exceeded");
@@ -655,14 +784,14 @@ struct TraceWriter::Impl {
         }
     }
 
-    void chunk(std::uint16_t type, Stamp stamp, const Bytes& payload) {
+    void chunk(std::uint16_t type, Stamp stamp, const Bytes& payload, std::uint16_t version = 1) {
         validate_stamp(stamp, previous);
         if (payload.size() > limits.chunk_bytes) {
             throw Error(ErrorCode::limit, "chunk byte cap exceeded");
         }
         Bytes header;
         put(header, type);
-        put(header, std::uint16_t{1});
+        put(header, version);
         put(header, std::uint32_t{0});
         put(header, stamp.sequence);
         put(header, std::bit_cast<std::uint64_t>(stamp.simulated_time));
@@ -681,6 +810,7 @@ struct TraceWriter::Impl {
 
     std::filesystem::path destination, staging;
     TraceLimits limits;
+    std::vector<AttributeDescriptor> relational_attributes;
     std::ofstream output;
     std::optional<Stamp> previous;
     bool sealed{}, published{};
@@ -699,6 +829,7 @@ void TraceWriter::append(const ObservationRecord& record) {
     }
     Bytes bytes;
     std::uint16_t type;
+    std::uint16_t version = 1;
     if (const auto* snap = std::get_if<Snapshot>(&record.payload)) {
         type = snapshot_type;
         if (snap->symbols().size() > writer.limits.chunk_bytes / sizeof(TypeId)) {
@@ -710,6 +841,12 @@ void TraceWriter::append(const ObservationRecord& record) {
         }
     } else if (const auto* snapshot = std::get_if<RelationalSnapshot>(&record.payload)) {
         type = relational_type;
+        if (!std::ranges::equal(snapshot->attribute_schema(), writer.relational_attributes)) {
+            throw Error(ErrorCode::invalid, "snapshot attribute schema differs from trace metadata");
+        }
+        if (!writer.relational_attributes.empty()) {
+            version = attributed_version;
+        }
         bytes = encode_relational(*snapshot, writer.limits.chunk_bytes);
     } else if (const auto* batch = std::get_if<EventBatch>(&record.payload)) {
         type = event_batch_type;
@@ -732,7 +869,7 @@ void TraceWriter::append(const ObservationRecord& record) {
             put(bytes, count);
         }
     }
-    writer.chunk(type, record.stamp, bytes);
+    writer.chunk(type, record.stamp, bytes, version);
 }
 
 void TraceWriter::finish() {

@@ -13,11 +13,17 @@ int main(int argc, char** argv) {
         std::string(64, 'a'), std::nullopt, "external-consumer.v1", "cpu", "u32",
         {true, true, false, true, false, false, clab::TimeDomain::discrete},
     };
-    const clab::Metadata meta{"consumer", "binary-u32", "step", true, true, provenance};
+    const std::array schema{clab::AttributeDescriptor{
+        clab::AttributeOwner::entity, "temperature", true,
+        clab::ContinuousAttribute{"K", 250, 400, 0.25},
+    }};
+    const clab::Metadata meta{"consumer", "binary-u32", "step", true, true, provenance,
+                              {schema.begin(), schema.end()}};
+    const std::array values{clab::AttributeColumn{clab::AttributeValue(300.25)}};
     clab::TraceWriter writer(path, meta);
     writer.append({{}, clab::Snapshot(std::array<clab::TypeId, 2>{0, 1})});
     writer.append({{1, 0, 0}, clab::RelationalSnapshot(
-        std::array<clab::EntityRow, 1>{{{7, 0}}}, {}, {})});
+        std::array<clab::EntityRow, 1>{{{7, 0}}}, {}, {}, values, schema)});
     writer.finish();
     clab::TraceReader trace(path);
     if (trace.metadata() != meta) {
