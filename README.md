@@ -2,6 +2,8 @@
 
 A C++20 trace reader, writer and tier-0 evaluator for the first implementation slice of the revised complexity-growth program. The evaluator takes recorded observations as input. It reports size, type frequencies, entropy, activity, recurrence and byte-RLE diagnostics.
 
+G0 passed on Linux x86-64, Linux arm64, and macOS arm64. The CLTR 1.0 wire contract is frozen. [Audit and scope](docs/G0-closeout.md)
+
 ## Build and run
 
 From this directory, with CMake 3.24 or later, a C++20 compiler, Make, and Python 3.9 or later for tests. The inspector uses system CommonCrypto on macOS and OpenSSL's Crypto development library on Linux.
@@ -42,7 +44,7 @@ Applications can link to `clab::trace` and `clab::evaluator` through `find_packa
 
 For attributed relational traces, `clab-inspect --metadata` lists the schema and `clab-inspect --attributes` lists the slots.
 
-- [CLTR draft format and metric definitions](docs/cltr-v1.md)
+- [CLTR 1.0 format and metric definitions](docs/cltr-v1.md)
 - [Initial verification protocol](protocols/E00-initial.json)
 - [Initial verification](docs/E00-initial-results.md)
 - [Relational snapshot and index verification](docs/E00-relational-results.md)

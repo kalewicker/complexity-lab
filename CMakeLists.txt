@@ -70,7 +70,7 @@ endif()
 
 install(DIRECTORY include/clab DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}"
     PATTERN substrate.hpp EXCLUDE)
-install(FILES docs/cltr-v1.md DESTINATION "${CMAKE_INSTALL_DOCDIR}")
+install(FILES docs/cltr-v1.md docs/G0-closeout.md DESTINATION "${CMAKE_INSTALL_DOCDIR}")
 install(EXPORT CLabTargets NAMESPACE clab:: DESTINATION "${CMAKE_INSTALL_LIBDIR}/cmake/CLab")
 configure_package_config_file(cmake/CLabConfig.cmake.in
     "${CMAKE_CURRENT_BINARY_DIR}/CLabConfig.cmake"

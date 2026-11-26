@@ -1,6 +1,6 @@
-# CLTR 1.0 draft wire format
+# CLTR 1.0 wire format
 
-This milestone implements uncompressed categorical and relational snapshots, event records, a small work ledger and checkpoint references. Multi-byte integers are unsigned little-endian. Floating-point time is IEEE 754 binary64 in little-endian order. Table sizes are bytes. There is no padding.
+The [G0 audit](G0-closeout.md) froze this wire contract. CLTR 1.0 supports uncompressed categorical and relational snapshots, event records, a small work ledger and checkpoint references. Multi-byte integers are unsigned little-endian. Floating-point time is IEEE 754 binary64 in little-endian order. Table sizes are bytes. There is no padding.
 
 ## File prefix
 
