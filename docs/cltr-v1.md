@@ -12,7 +12,24 @@ This milestone implements uncompressed categorical and relational snapshots, eve
 | Byte-order marker | 4 | 0x01020304 |
 | Metadata length | 4 | Number of UTF-8 JSON bytes |
 
-Metadata immediately follows. Required fields are nonempty strings `run_id`, `encoding`, `time_unit` and booleans `exact`, `fixed_sites`. An encoding identifies the categorical alphabet and the ordering convention. `exact` indicates complete coverage under the declared encoding. A producer setting `fixed_sites` must preserve the same sites in the same order between snapshots. A sampled fixed-site observation can describe recurrence of the sample. Unknown metadata fields are ignored by this reader. Preserve the original trace for provenance.
+Metadata immediately follows. Required fields are nonempty strings `run_id`, `encoding`, `time_unit` and booleans `exact`, `fixed_sites`. An encoding identifies the categorical alphabet and the ordering convention. `exact` indicates complete coverage under the declared encoding. A producer setting `fixed_sites` must preserve the same sites in the same order between snapshots. A sampled fixed-site observation can describe recurrence of the sample. Unknown metadata fields are ignored by this reader. Duplicate JSON keys at any nesting level cause validation to fail. Preserve the original trace bytes when unknown extensions matter.
+
+### Optional run provenance
+
+The `provenance` object is optional. Its absence means the producer supplied only the legacy metadata fields. When present, it has the following fields.
+
+| Field | Value |
+|---|---|
+| `config_sha256` | SHA-256 of the configuration bytes, encoded as 64 lowercase hexadecimal characters |
+| `seed` | Optional unsigned integer from 0 to 18446744073709551615. Omit it when unavailable |
+| `producer` | Nonempty identifier for the trace producer |
+| `backend` | Nonempty identifier for the execution backend |
+| `precision` | Nonempty producer-defined description of the observation precision |
+| `capabilities` | Object with the declared observation capabilities below |
+
+A capability object supplies six JSON booleans. `native`, `relational` and `temporal` declare the available observation channels. `stable_entity_ids` declares that IDs refer to the same entities over the run. `implicit_relations` declares that the producer's schema defines implicit relations. `interventions` declares that the producer supports intervention. The required string `time_domain` is `discrete` or `continuous`. Availability is a producer declaration even when the stored trace omits a channel. Coverage is recorded by the top-level `exact` field.
+
+Seed zero is an explicit value. Use a JSON parser that preserves 64-bit unsigned integers when reading the output. Readers validate the provenance structure. Confirming the configuration digest requires the separate configuration bytes.
 
 ## Chunk envelope
 
@@ -87,6 +104,8 @@ A complete trace has a checked end marker. Recovery exposes only the complete va
 `clab-inspect --checkpoints TRACE.cltr` lists checkpoint sequence, work, format, byte length and the lowercase hexadecimal SHA-256 digest. It uses the same exit statuses as the index. A complete scan verifies the trace envelope and reference encoding.
 
 `clab-inspect --verify-checkpoint SEQUENCE CHECKPOINT_FILE TRACE.cltr` first validates the complete trace and selects the reference by chunk sequence. It then checks the explicitly supplied regular file. Verification streams through a 64 KiB buffer and reports success only when the byte count and SHA-256 both match. Argument errors exit 2. Invalid traces, missing references and target mismatches exit 1. A successful match establishes the identity of the bytes read against the reference. Checkpoint trust, decoding and state restore belong to the producer's workflow.
+
+`clab-inspect --metadata TRACE.cltr` emits the recognized header fields as JSON after validating the trace. Unknown extensions are omitted from this normalized view. With `--recover-prefix`, exit 3 indicates that the header is valid and the remaining chunks form an incomplete prefix. On a strict read, an incomplete or invalid trace produces no metadata output.
 
 ## Tier 0 output
 

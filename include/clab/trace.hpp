@@ -7,6 +7,9 @@
 #include <memory>
 
 namespace clab {
+// Serialize the recognized metadata fields using the CLTR JSON representation.
+[[nodiscard]] std::string encode_metadata_json(const Metadata& metadata);
+
 enum class TraceMode { strict, recover_prefix };
 enum class TraceStatus { reading, complete, incomplete };
 

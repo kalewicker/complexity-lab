@@ -9,6 +9,7 @@
 #include <stdlib.h>
 #include <unistd.h>
 #include <fstream>
+#include <set>
 #include <system_error>
 #include <type_traits>
 #include <utility>
@@ -18,6 +19,7 @@ namespace {
 using Bytes = std::vector<std::uint8_t>;
 using Json = nlohmann::json;
 constexpr std::size_t prefix_size = 16;
+constexpr int metadata_max_depth = 32;
 constexpr std::size_t chunk_header_size = 44;
 constexpr std::uint16_t end_type = 0;
 constexpr std::uint16_t snapshot_type = 1;
@@ -73,13 +75,69 @@ void validate_metadata(const Metadata& meta) {
     if (meta.run_id.empty() || meta.encoding.empty() || meta.time_unit.empty()) {
         throw Error(ErrorCode::invalid, "empty metadata identifier");
     }
+    if (!meta.provenance) {
+        return;
+    }
+    const auto& provenance = *meta.provenance;
+    const auto is_lower_hex = [](char ch) {
+        return (ch >= '0' && ch <= '9') || (ch >= 'a' && ch <= 'f');
+    };
+    if (provenance.config_sha256.size() != 64 ||
+        !std::ranges::all_of(provenance.config_sha256, is_lower_hex)) {
+        throw Error(ErrorCode::invalid, "invalid configuration SHA-256 in metadata");
+    }
+    if (provenance.producer.empty() || provenance.backend.empty() || provenance.precision.empty()) {
+        throw Error(ErrorCode::invalid, "empty provenance identifier");
+    }
+    const auto domain = provenance.capabilities.time_domain;
+    if (domain != TimeDomain::discrete && domain != TimeDomain::continuous) {
+        throw Error(ErrorCode::invalid, "invalid observation time domain");
+    }
+}
+
+TraceProvenance parse_provenance(const Json& obj) {
+    TraceProvenance value;
+    value.config_sha256 = obj.at("config_sha256").get<std::string>();
+    value.producer = obj.at("producer").get<std::string>();
+    value.backend = obj.at("backend").get<std::string>();
+    value.precision = obj.at("precision").get<std::string>();
+    if (const auto seed = obj.find("seed"); seed != obj.end()) {
+        if (!seed->is_number_unsigned()) {
+            throw Error(ErrorCode::invalid, "metadata seed must be an unsigned 64-bit integer");
+        }
+        value.seed = seed->get<std::uint64_t>();
+    }
+    const auto& capabilities = obj.at("capabilities");
+    value.capabilities.native = capabilities.at("native").get<bool>();
+    value.capabilities.relational = capabilities.at("relational").get<bool>();
+    value.capabilities.temporal = capabilities.at("temporal").get<bool>();
+    value.capabilities.stable_entity_ids = capabilities.at("stable_entity_ids").get<bool>();
+    value.capabilities.implicit_relations = capabilities.at("implicit_relations").get<bool>();
+    value.capabilities.interventions = capabilities.at("interventions").get<bool>();
+    const auto time_domain = capabilities.at("time_domain").get<std::string>();
+    if (time_domain == "discrete") {
+        value.capabilities.time_domain = TimeDomain::discrete;
+    } else if (time_domain == "continuous") {
+        value.capabilities.time_domain = TimeDomain::continuous;
+    } else {
+        throw Error(ErrorCode::invalid, "invalid observation time domain");
+    }
+    return value;
 }
 
 Metadata parse_metadata(const Bytes& bytes) {
     try {
-        const auto obj = Json::parse(bytes, [](int depth, Json::parse_event_t, Json&) {
-            if (depth > 32) {
+        std::array<std::set<std::string>, metadata_max_depth + 1> keys;
+        const auto obj = Json::parse(bytes, [&](int depth, Json::parse_event_t event, Json& value) {
+            if (depth > metadata_max_depth) {
                 throw Error(ErrorCode::limit, "CLTR metadata nesting cap exceeded");
+            }
+            // The callback counts the enclosing object for a key, but not its start.
+            if (event == Json::parse_event_t::object_start) {
+                keys[depth].clear();
+            } else if (event == Json::parse_event_t::key &&
+                       !keys[depth - 1].insert(value.get<std::string>()).second) {
+                throw Error(ErrorCode::invalid, "duplicate key in CLTR metadata");
             }
             return true;
         });
@@ -87,6 +145,9 @@ Metadata parse_metadata(const Bytes& bytes) {
                        obj.at("encoding").get<std::string>(),
                        obj.at("time_unit").get<std::string>(),
                        obj.at("exact").get<bool>(), obj.at("fixed_sites").get<bool>()};
+        if (const auto provenance = obj.find("provenance"); provenance != obj.end()) {
+            value.provenance = parse_provenance(*provenance);
+        }
         validate_metadata(value);
         return value;
     } catch (const Json::exception&) {
@@ -345,6 +406,38 @@ Bytes encode_checkpoint_ref(const CheckpointRef& ref) {
 
 }
 
+std::string encode_metadata_json(const Metadata& metadata) {
+    validate_metadata(metadata);
+    try {
+        Json obj{{"run_id", metadata.run_id}, {"encoding", metadata.encoding},
+                 {"time_unit", metadata.time_unit}, {"exact", metadata.exact},
+                 {"fixed_sites", metadata.fixed_sites}};
+        if (metadata.provenance) {
+            const auto& value = *metadata.provenance;
+            const auto& capabilities = value.capabilities;
+            Json fields{
+                {"config_sha256", value.config_sha256}, {"producer", value.producer},
+                {"backend", value.backend}, {"precision", value.precision},
+                {"capabilities",
+                 {{"native", capabilities.native}, {"relational", capabilities.relational},
+                  {"temporal", capabilities.temporal},
+                  {"stable_entity_ids", capabilities.stable_entity_ids},
+                  {"implicit_relations", capabilities.implicit_relations},
+                  {"interventions", capabilities.interventions},
+                  {"time_domain", capabilities.time_domain == TimeDomain::discrete ?
+                                  "discrete" : "continuous"}}},
+            };
+            if (value.seed) {
+                fields["seed"] = *value.seed;
+            }
+            obj["provenance"] = std::move(fields);
+        }
+        return obj.dump();
+    } catch (const Json::exception&) {
+        throw Error(ErrorCode::invalid, "metadata must be UTF-8");
+    }
+}
+
 struct TraceReader::Impl {
     Impl(const std::filesystem::path& path, TraceMode chosen_mode, TraceLimits chosen_limits,
          ChunkIndexSink sink)
@@ -535,15 +628,7 @@ std::optional<ObservationRecord> TraceReader::next() {
 struct TraceWriter::Impl {
     Impl(const std::filesystem::path& path, const Metadata& meta, TraceLimits chosen_limits)
         : destination(path), limits(chosen_limits) {
-        validate_metadata(meta);
-        std::string json;
-        try {
-            json = Json{{"run_id", meta.run_id}, {"encoding", meta.encoding},
-                        {"time_unit", meta.time_unit}, {"exact", meta.exact},
-                        {"fixed_sites", meta.fixed_sites}}.dump();
-        } catch (const Json::exception&) {
-            throw Error(ErrorCode::invalid, "metadata must be UTF-8");
-        }
+        const auto json = encode_metadata_json(meta);
         if (json.size() > limits.metadata_bytes) {
             throw Error(ErrorCode::limit, "metadata byte cap exceeded");
         }

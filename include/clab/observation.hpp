@@ -16,12 +16,32 @@ struct Stamp {
     bool operator==(const Stamp&) const = default;
 };
 
+enum class TimeDomain { discrete, continuous };
+
+struct ObservationCapabilities {
+    bool native{}, relational{}, temporal{};
+    bool stable_entity_ids{}, implicit_relations{}, interventions{};
+    TimeDomain time_domain{TimeDomain::discrete};
+    bool operator==(const ObservationCapabilities&) const = default;
+};
+
+struct TraceProvenance {
+    std::string config_sha256;
+    std::optional<std::uint64_t> seed;
+    std::string producer;
+    std::string backend;
+    std::string precision;
+    ObservationCapabilities capabilities;
+    bool operator==(const TraceProvenance&) const = default;
+};
+
 struct Metadata {
     std::string run_id;
     std::string encoding;
     std::string time_unit;
     bool exact{};
     bool fixed_sites{};
+    std::optional<TraceProvenance> provenance{};
     bool operator==(const Metadata&) const = default;
 };
 

@@ -13,6 +13,7 @@ ctest --preset release
 build/release/clab-fixture build/demo
 build/release/clab-inspect build/demo/trace.cltr
 build/release/clab-inspect --index build/demo/trace.cltr
+build/release/clab-inspect --metadata build/demo/trace.cltr
 build/release/clab-eval build/demo/trace.cltr
 ```
 
@@ -47,3 +48,4 @@ Applications can link to `clab::trace` and `clab::evaluator` through `find_packa
 - [Checkpoint target verification](docs/E00-checkpoint-target-results.md)
 - [Worker watchdog and crash reconciliation](docs/E00-worker-results.md)
 - [Tier-0 structural fixture checks](docs/E01-tier0-fixtures.md)
+- [Typed trace provenance verification](docs/E00-provenance-results.md)

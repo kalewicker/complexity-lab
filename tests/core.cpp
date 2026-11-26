@@ -158,6 +158,35 @@ void temporal_round_trip(const std::filesystem::path& directory) {
     capped.finish();
 }
 
+void provenance_round_trip(const std::filesystem::path& directory) {
+    const auto path = directory / "provenance.cltr";
+    const clab::TraceProvenance provenance{
+        std::string(64, 'a'), 0, "test-producer.v1", "reference-cpu", "u32-symbols",
+        {true, false, true, false, true, false, clab::TimeDomain::discrete},
+    };
+    const clab::Metadata meta{"provenance", "test-u32", "step", true, true, provenance};
+    auto malformed = meta;
+    malformed.provenance->config_sha256[0] = 'A';
+    const auto entry_count = [&] {
+        return std::ranges::distance(std::filesystem::directory_iterator(directory),
+                                     std::filesystem::directory_iterator{});
+    };
+    const auto before = entry_count();
+    expect_error(clab::ErrorCode::invalid, [&] { clab::TraceWriter writer(path, malformed); });
+    malformed = meta;
+    malformed.provenance->capabilities.time_domain = static_cast<clab::TimeDomain>(99);
+    expect_error(clab::ErrorCode::invalid, [&] { clab::TraceWriter writer(path, malformed); });
+    require(entry_count() == before, "invalid metadata created a staging artifact");
+
+    clab::TraceWriter writer(path, meta);
+    writer.finish();
+    clab::TraceReader reader(path);
+    require(reader.metadata() == meta, "provenance round trip");
+    require(clab::encode_metadata_json(reader.metadata()).find("\"seed\":0") != std::string::npos,
+            "present zero seed was omitted");
+    require(!reader.next() && reader.status() == clab::TraceStatus::complete, "provenance end");
+}
+
 #ifdef CLAB_TEST_SUBSTRATES
 void replay() {
     expect_error(clab::ErrorCode::limit, [] { clab::BinaryCa world(9, 0, 71); });
@@ -191,6 +220,7 @@ int main() {
         round_trips(temp.path);
         relational_round_trip(temp.path);
         temporal_round_trip(temp.path);
+        provenance_round_trip(temp.path);
 #ifdef CLAB_TEST_SUBSTRATES
         replay();
 #endif

@@ -1,0 +1,12 @@
+{
+  "protocol": "E00-provenance-v1",
+  "scope": "optional typed CLTR provenance in the existing version 1.0 metadata envelope",
+  "checks": {
+    "independent": "a Python-authored header with all fields, a maximum uint64 seed, continuous time and an unrecognized top-level extension is readable and normalizes to the declared known fields",
+    "compatibility": "legacy headers omit provenance, a missing seed stays absent, a seed of zero stays present, and all earlier trace digests and diagnostics remain valid",
+    "writer": "round-trip typed C++ provenance, check metadata JSON, and reject invalid configuration digests and time enums before staging",
+    "rejection": "reject non-object provenance, missing required field, invalid digests, invalid seed types/ranges, invalid time and capability values, empty identifiers, and duplicate keys at root and nested levels",
+    "transport": "strict metadata inspection checks the complete trace; recovery can report validated metadata with incomplete status"
+  },
+  "limits": "records producer declarations. It does not authenticate a run, verify configuration bytes, bind capability declarations to every chunk, or add attribute schemas."
+}

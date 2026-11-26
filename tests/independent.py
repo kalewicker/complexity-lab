@@ -1,6 +1,7 @@
 """Produce CLTR bytes without using any C++ implementation code."""
 import argparse
 import csv
+from copy import deepcopy
 import hashlib
 import io
 import json
@@ -30,9 +31,12 @@ def crc32c(data):
     return crc ^ 0xFFFFFFFF
 
 
-def header(meta=META):
-    data = json.dumps(meta, separators=(",", ":")).encode()
+def metadata_header(data):
     return struct.pack("<4sHHII", b"CLTR", 1, 0, 0x01020304, len(data)) + data
+
+
+def header(meta=META):
+    return metadata_header(json.dumps(meta, separators=(",", ":")).encode())
 
 
 def chunk(kind, sequence, time, work, payload=b"", flags=0, version=1):
@@ -496,6 +500,82 @@ def check_tier0_panel(args, directory):
     return receipts
 
 
+def check_provenance(args, directory):
+    config = b'{"steps":4}'
+    provenance = {
+        "config_sha256": hashlib.sha256(config).hexdigest(),
+        "seed": 2**64 - 1,
+        "producer": "external-é.v2",
+        "backend": "portable-cpu",
+        "precision": "u32-categorical",
+        "capabilities": {
+            "native": True, "relational": False, "temporal": True,
+            "stable_entity_ids": False, "implicit_relations": True, "interventions": False,
+            "time_domain": "continuous",
+        },
+    }
+    expected = META | {"provenance": provenance}
+    supplied = expected | {"future_extension": [{"kind": 1}, {"kind": 2}]}
+    events = chunk(2, 0, 0.5, 1, struct.pack("<3Q", 1, 0, 0))
+    end = chunk(0, 1, 0.5, 1)
+    raw = header(supplied) + events + end
+    trace = directory / "provenance.cltr"
+    trace.write_bytes(raw)
+    normalized = json.loads(run(args.inspect, "--metadata", trace))
+    assert normalized == expected, normalized
+    rows = list(csv.DictReader(io.StringIO(run(args.eval, trace))))
+    assert metric(rows, "activity.events.v1", 0)["value"] == "1"
+
+    for seed in (0, None):
+        version = deepcopy(expected)
+        if seed is None:
+            del version["provenance"]["seed"]
+        else:
+            version["provenance"]["seed"] = seed
+        trace.write_bytes(header(version) + events + end)
+        assert json.loads(run(args.inspect, "--metadata", trace)) == version
+    trace.write_bytes(header() + events + end)
+    assert json.loads(run(args.inspect, "--metadata", trace)) == META
+
+    trace.write_bytes(raw[:-1])
+    assert not run(args.inspect, "--metadata", trace, code=1)
+    recovered = run(args.inspect, "--metadata", "--recover-prefix", trace, code=3)
+    assert json.loads(recovered) == expected
+
+    malformed = [header(META | {"provenance": False})]
+
+    def invalid_field(key, value):
+        version = deepcopy(expected)
+        version["provenance"][key] = value
+        malformed.append(header(version))
+
+    missing_field = deepcopy(expected)
+    del missing_field["provenance"]["precision"]
+    malformed.append(header(missing_field))
+    for config_hash in ("a" * 63, "A" * 64, "g" * 64):
+        invalid_field("config_sha256", config_hash)
+    for seed in (-1, 2**64, 1.0, "0", True, None):
+        invalid_field("seed", seed)
+    invalid_field("producer", "")
+    invalid_field("capabilities", provenance["capabilities"] | {"time_domain": "event"})
+    invalid_field("capabilities", provenance["capabilities"] | {"stable_entity_ids": 1})
+
+    serialized = json.dumps(expected, separators=(",", ":")).encode()
+    malformed.extend([
+        metadata_header(b'{"run_id":"duplicate",' + serialized[1:]),
+        metadata_header(serialized.replace(b'"native":true', b'"native":false,"native":true')),
+    ])
+    for prefix in malformed:
+        trace.write_bytes(prefix + events + end)
+        assert not run(args.inspect, "--metadata", trace, code=1)
+    return {
+        "trace_sha256": hashlib.sha256(raw).hexdigest(),
+        "config_sha256": provenance["config_sha256"],
+        "exact_seed_decimal": str(provenance["seed"]),
+        "malformed_metadata_rejected": len(malformed),
+    }
+
+
 def check(args, directory):
     assert crc32c(b"123456789") == 0xE3069283
     first = struct.pack("<4I", 0, 0, 1, 1)
@@ -572,6 +652,7 @@ def check(args, directory):
         "temporal": check_temporal(args, directory),
         "checkpoint_targets": check_checkpoint_targets(args, directory),
         "tier0_panel": check_tier0_panel(args, directory),
+        "provenance": check_provenance(args, directory),
     }
     assert result["categorical_sha256"] == "3dda44df0c60342ddd2b6456bbb350ea66a50141d86dc62ba4e887a0000fc9ba"
     assert result["events_sha256"] == "5f5e31d67be90e5eea677c262b01358df9cc2427ff86a17d975c44f4d34ddac1"

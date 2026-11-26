@@ -11,6 +11,8 @@
 #include <utility>
 
 namespace {
+enum class Output { summary, index, checkpoints, metadata };
+
 int verify_checkpoint(std::string_view sequence_arg, const std::filesystem::path& target,
                       const std::filesystem::path& trace_path) {
     std::uint64_t sequence{};
@@ -42,7 +44,7 @@ int verify_checkpoint(std::string_view sequence_arg, const std::filesystem::path
 }
 
 void usage() {
-    std::cerr << "usage: clab-inspect [--recover-prefix] [--index|--checkpoints] TRACE.cltr\n"
+    std::cerr << "usage: clab-inspect [--recover-prefix] [--index|--checkpoints|--metadata] TRACE.cltr\n"
               << "       clab-inspect --verify-checkpoint SEQUENCE CHECKPOINT_FILE TRACE.cltr\n";
 }
 }
@@ -61,28 +63,29 @@ int main(int argc, char** argv) {
         }
     }
     bool recover = false;
-    bool index = false;
-    bool checkpoints = false;
+    Output output = Output::summary;
     int arg = 1;
     for (; arg < argc - 1; ++arg) {
         const std::string_view flag = argv[arg];
         if (flag == "--recover-prefix" && !recover) {
             recover = true;
-        } else if (flag == "--index" && !index) {
-            index = true;
-        } else if (flag == "--checkpoints" && !checkpoints) {
-            checkpoints = true;
+        } else if (flag == "--index" && output == Output::summary) {
+            output = Output::index;
+        } else if (flag == "--checkpoints" && output == Output::summary) {
+            output = Output::checkpoints;
+        } else if (flag == "--metadata" && output == Output::summary) {
+            output = Output::metadata;
         } else {
             break;
         }
     }
-    if (argc < 2 || arg != argc - 1 || (index && checkpoints)) {
+    if (argc < 2 || arg != argc - 1) {
         usage();
         return 2;
     }
     try {
         clab::ChunkIndexSink sink;
-        if (index) {
+        if (output == Output::index) {
             std::cout.imbue(std::locale::classic());
             std::cout << std::setprecision(std::numeric_limits<double>::max_digits10);
             std::cout << "sequence,header_offset,type,version,flags,payload_bytes,crc32c,work,simulated_time\n";
@@ -95,13 +98,13 @@ int main(int argc, char** argv) {
         }
         const auto mode = recover ? clab::TraceMode::recover_prefix : clab::TraceMode::strict;
         clab::TraceReader trace(argv[arg], mode, {}, std::move(sink));
-        if (checkpoints) {
+        if (output == Output::checkpoints) {
             std::cout << "sequence,work,format,size_bytes,sha256\n";
         }
         std::uint64_t records = 0;
         while (auto record = trace.next()) {
             ++records;
-            if (checkpoints) {
+            if (output == Output::checkpoints) {
                 if (const auto* ref = std::get_if<clab::CheckpointRef>(&record->payload)) {
                     constexpr std::string_view hex = "0123456789abcdef";
                     std::cout << record->stamp.sequence << ',' << record->stamp.work << ','
@@ -114,9 +117,11 @@ int main(int argc, char** argv) {
             }
         }
         const bool complete = trace.status() == clab::TraceStatus::complete;
-        if (!index && !checkpoints) {
+        if (output == Output::summary) {
             std::cout << "status=" << (complete ? "complete" : "incomplete")
                       << "\nrecords=" << records << "\nchunks=" << trace.chunks_read() << '\n';
+        } else if (output == Output::metadata) {
+            std::cout << clab::encode_metadata_json(trace.metadata()) << '\n';
         }
         std::cout.flush();
         if (!std::cout) {
