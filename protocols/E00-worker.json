@@ -1,0 +1,13 @@
+{
+  "protocol": "E00-worker-v1",
+  "scope": "single child fixture with a monotonic wall deadline and parent-owned terminal status",
+  "panel": [
+    {"scenario": "work", "target_work": 8, "work_cap": 5, "wall_cap_ms": 5000, "expected": "capped/work; complete trace through work 5"},
+    {"scenario": "completed", "target_work": 8, "work_cap": 8, "wall_cap_ms": 5000, "expected": "completed; complete trace through work 8"},
+    {"scenario": "wall-cap", "target_work": 8, "work_cap": 8, "wall_cap_ms": 1500, "expected": "capped/wall after blocking at work 2; recoverable trace prefix"},
+    {"scenario": "crash", "target_work": 8, "work_cap": 8, "wall_cap_ms": 5000, "expected": "failed/signal after self-signalling at work 3; recoverable trace prefix"},
+    {"scenario": "memory-cap", "target_work": 8, "work_cap": 8, "wall_cap_ms": 5000, "expected": "capped/memory from a 71-byte cell-buffer cap; no trace"}
+  ],
+  "checks": "one matching terminal row per planned row; only paired snapshot and ledger records contribute to recovered work; verify wall/signal distinction, prefix CRCs and original default trace digest",
+  "limits": "fixture owns a single child with no descendants. Supervisor death, power loss, and general campaign scheduling are outside this slice."
+}

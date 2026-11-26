@@ -16,7 +16,7 @@ build/release/clab-inspect --index build/demo/trace.cltr
 build/release/clab-eval build/demo/trace.cltr
 ```
 
-Choose a fresh directory for each fixture run. For traces containing checkpoint references, `clab-inspect --checkpoints TRACE.cltr` lists their format, size and SHA-256. Use `clab-inspect --verify-checkpoint SEQUENCE CHECKPOINT_FILE TRACE.cltr` to compare one reference against a local file. The demo records a tiny Rule 90 world under a five-sweep cap. The initial configure fetches the pinned MIT-licensed nlohmann/json 3.11.3 header and verifies its SHA-256. For an offline configure, set `-DCLAB_JSON_HEADER=/path/to/json.hpp` to a verified copy. The evaluator needs only a trace at runtime.
+Choose a fresh directory for each fixture run. For traces containing checkpoint references, `clab-inspect --checkpoints TRACE.cltr` lists their format, size and SHA-256. Use `clab-inspect --verify-checkpoint SEQUENCE CHECKPOINT_FILE TRACE.cltr` to compare one reference against a local file. The demo records a tiny Rule 90 world under a five-sweep cap. Use `clab-fixture --scenario wall-cap NEW_OUTPUT_DIRECTORY` to exercise the watchdog, or `--scenario crash` to exercise a worker failure. In either case, the parent writes one terminal row to `status.csv`. Its trace path is relative to the output directory. For an incomplete trace, use `clab-inspect --recover-prefix` on that path. The initial configure fetches the pinned MIT-licensed nlohmann/json 3.11.3 header and verifies its SHA-256. For an offline configure, set `-DCLAB_JSON_HEADER=/path/to/json.hpp` to a verified copy. The evaluator needs only a trace at runtime.
 
 ## Install without substrates
 
@@ -39,3 +39,4 @@ Applications can link to `clab::trace` and `clab::evaluator` through `find_packa
 - [Relational snapshot and index verification](docs/E00-relational-results.md)
 - [Detailed event and checkpoint reference verification](docs/E00-events-results.md)
 - [Checkpoint target verification](docs/E00-checkpoint-target-results.md)
+- [Worker watchdog and crash reconciliation](docs/E00-worker-results.md)

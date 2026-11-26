@@ -5,6 +5,7 @@ import hashlib
 import io
 import json
 import os
+import signal
 import struct
 import subprocess
 import tempfile
@@ -41,7 +42,8 @@ def chunk(kind, sequence, time, work, payload=b"", flags=0, version=1):
 
 
 def run(tool, *args, code=0):
-    result = subprocess.run([str(tool), *map(str, args)], capture_output=True, text=True)
+    result = subprocess.run([str(tool), *map(str, args)], capture_output=True, text=True,
+                            timeout=20)
     assert result.returncode == code, (tool, args, result.returncode, result.stderr)
     return result.stdout
 
@@ -284,6 +286,117 @@ def check_checkpoint_targets(args, directory):
     }
 
 
+def read_fixture_prefix(data, run_id, last_work, complete):
+    magic, major, minor, marker, metadata_bytes = struct.unpack_from("<4sHHII", data)
+    assert (magic, major, minor, marker) == (b"CLTR", 1, 0, 0x01020304)
+    offset = 16 + metadata_bytes
+    assert json.loads(data[16:offset])["run_id"] == run_id
+    sequence = 0
+    last_cells = None
+    processed_end = False
+    while offset < len(data):
+        raw = data[offset:offset + 44]
+        kind, version, flags, seq, time, work, raw_size, size, crc = struct.unpack("<HHIQdQIII", raw)
+        offset += 44
+        body = data[offset:offset + size]
+        offset += size
+        assert len(body) == raw_size == size
+        assert crc32c(raw[:40] + body) == crc
+        assert (version, flags, seq) == (1, 0, sequence)
+        if kind == 0:
+            assert complete and sequence == 2 * (last_work + 1)
+            assert size == 0 and work == time == last_work and offset == len(data)
+            processed_end = True
+            break
+        assert work == time == sequence // 2 <= last_work
+        if sequence % 2 == 0:
+            assert kind == 1
+            cells = struct.unpack("<9I", body)
+            assert all(cell in (0, 1) for cell in cells)
+            if last_cells is not None:
+                assert cells == tuple(last_cells[(i - 1) % 9] ^ last_cells[(i + 1) % 9]
+                                      for i in range(9))
+            last_cells = cells
+        else:
+            assert kind == 3
+            assert struct.unpack("<6Q", body) == (work, 18 * work, 9 * work, 9, 72, 72)
+        sequence += 1
+    assert sequence == 2 * (last_work + 1)
+    assert processed_end == complete
+
+
+def check_worker_panel(args, directory):
+    panel = (
+        ("work", 0, "capped", "work", 5, "complete"),
+        ("completed", 0, "completed", "", 8, "complete"),
+        ("wall-cap", 0, "capped", "wall", 2, "incomplete"),
+        ("crash", 1, "failed", "signal", 3, "incomplete"),
+        ("memory-cap", 0, "capped", "memory", None, "missing"),
+    )
+    results = {}
+    for scenario, exit_code, status, reason, last_work, trace_status in panel:
+        output = directory / scenario
+        argv = (output,) if scenario == "work" else ("--scenario", scenario, output)
+        run(args.fixture, *argv, code=exit_code)
+        with (output / "planned.csv").open() as file:
+            planned, = csv.DictReader(file)
+        with (output / "status.csv").open() as file:
+            receipt, = csv.DictReader(file)
+        assert receipt["run_id"] == planned["run_id"]
+        assert (receipt["status"], receipt["reason"], receipt["trace_status"]) == (
+            status, reason, trace_status,
+        ), receipt
+        assert receipt["completed_work"] == ("" if last_work is None else str(last_work)), receipt
+        assert planned["target_work"] == "8"
+        assert planned["hard_work_cap"] == ("5" if scenario == "work" else "8")
+        assert planned["cell_buffer_cap"] == ("71" if scenario == "memory-cap" else "128")
+        assert planned["wall_cap_ms"] == ("1500" if scenario == "wall-cap" else "5000")
+        assert not list(output.glob("*.csv.tmp")), output
+
+        signal_case = scenario in {"wall-cap", "crash"}
+        if signal_case:
+            assert receipt["worker_signal"] == str(signal.SIGKILL.value)
+            assert receipt["worker_exit"] == ""
+            assert (int(receipt["elapsed_ms"]) >= int(planned["wall_cap_ms"])) == (reason == "wall")
+        else:
+            assert receipt["worker_exit"] == ("2" if scenario == "memory-cap" else "0"), receipt
+            assert receipt["worker_signal"] == ""
+
+        row = {
+            "status": status, "reason": reason, "completed_work": last_work,
+            "trace_status": trace_status, "elapsed_ms": int(receipt["elapsed_ms"]),
+            "worker_exit": receipt["worker_exit"], "worker_signal": receipt["worker_signal"],
+        }
+        if trace_status == "missing":
+            assert receipt["trace"] == ""
+            assert not list(output.rglob("*.cltr")) and not list(output.rglob("*.partial"))
+        else:
+            trace = output / receipt["trace"]
+            complete = trace_status == "complete"
+            data = trace.read_bytes()
+            row["trace_sha256"] = hashlib.sha256(data).hexdigest()
+            read_fixture_prefix(data, planned["run_id"], last_work, complete)
+            index = list(csv.DictReader(io.StringIO(run(
+                args.inspect, "--index", "--recover-prefix", trace, code=0 if complete else 3,
+            ))))
+            assert len(index) == 2 * (last_work + 1) + complete
+            assert max(int(record["work"]) for record in index) == last_work
+            if complete:
+                assert receipt["trace"] == "trace.cltr" and not list(output.rglob("*.partial"))
+            else:
+                assert trace.name == "trace.partial" and not (output / "trace.cltr").exists()
+                assert not run(args.inspect, trace, code=1)
+        results[scenario] = row
+
+    mock = results["work"]
+    assert mock["trace_sha256"] == "890dcb152bc02ec22bb4754fefbd69a6bea966239fbdc87df7d3c72110780ff1"
+    rows = list(csv.DictReader(io.StringIO(run(args.eval, directory / "work" / "trace.cltr"))))
+    assert {row["run_id"] for row in rows} == {"mock-work-cap"}
+    assert max(int(row["work"]) for row in rows if row["work"]) == 5
+    assert metric(rows, "work.logical_updates.v1", 11)["value"] == "5"
+    return results
+
+
 def check(args, directory):
     assert crc32c(b"123456789") == 0xE3069283
     first = struct.pack("<4I", 0, 0, 1, 1)
@@ -365,23 +478,7 @@ def check(args, directory):
     assert result["relational"]["sha256"] == "b9d66dd6527a31254bd27f97840a345fde40c5b100507d0def7720ecd410412d"
     assert result["temporal"]["trace_sha256"] == "602af49f1f3105f4a1db42c61c69e67fdb9235f48a194863f8500bb0725f4e60"
     if args.fixture:
-        output = directory / "mock"
-        run(args.fixture, output)
-        with (output / "planned.csv").open() as file:
-            planned, = csv.DictReader(file)
-        with (output / "status.csv").open() as file:
-            status, = csv.DictReader(file)
-        assert planned["run_id"] == status["run_id"]
-        assert (status["status"], status["reason"], status["completed_work"]) == ("capped", "work", "5")
-        assert planned["hard_work_cap"] == "5" and planned["target_work"] == "8"
-        mock_trace = output / status["trace"]
-        rows = list(csv.DictReader(io.StringIO(run(args.eval, mock_trace))))
-        assert {row["run_id"] for row in rows} == {planned["run_id"]}
-        assert max(int(row["work"]) for row in rows if row["work"]) == 5
-        assert metric(rows, "work.logical_updates.v1", 11)["value"] == "5"
-        mock_sha = hashlib.sha256(mock_trace.read_bytes()).hexdigest()
-        assert mock_sha == "890dcb152bc02ec22bb4754fefbd69a6bea966239fbdc87df7d3c72110780ff1"
-        result["mock"] = status | {"trace_sha256": mock_sha}
+        result["worker_panel"] = check_worker_panel(args, directory)
     return result
 
 
