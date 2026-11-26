@@ -8,6 +8,10 @@ int main(int argc, char** argv) {
     if (argc != 2) {
         return 1;
     }
+    const auto* entropy_spec = clab::find_metric("state.shannon_bits_per_symbol.v1");
+    if (!entropy_spec || entropy_spec->unit != "bits_per_symbol" || clab::metric_catalog().size() != 27) {
+        return 1;
+    }
     const std::filesystem::path path(argv[1]);
     const clab::TraceProvenance provenance{
         std::string(64, 'a'), std::nullopt, "external-consumer.v1", "cpu", "u32",

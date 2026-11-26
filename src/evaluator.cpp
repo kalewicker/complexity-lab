@@ -1,6 +1,7 @@
 #include <clab/evaluator.hpp>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <deque>
 #include <limits>
@@ -9,27 +10,40 @@
 
 namespace clab {
 namespace {
-constexpr auto site_count = "state.symbol_count.v1";
-constexpr auto entropy = "state.shannon_bits_per_symbol.v1";
-constexpr auto type_count = "state.type_count.v1";
-constexpr auto compression_ratio = "state.rle_bytes_per_raw_byte.v1";
-constexpr auto longest_run = "state.longest_symbol_run.v1";
-constexpr auto changed = "state.changed_sites.v1";
-constexpr auto recurrence = "state.recurrence_lag_snapshots.v1";
-constexpr auto lookback = "state.recurrence_lookback_snapshots.v1";
-constexpr auto event_count = "activity.events.v1";
-constexpr auto births = "activity.births.v1";
-constexpr auto deaths = "activity.deaths.v1";
-constexpr auto observed_events = "activity.observed_events.v1";
-constexpr auto reconstructed_events = "activity.reconstructed_events.v1";
-constexpr auto entities = "relational.entity_count.v1";
-constexpr auto relations = "relational.relation_count.v1";
-constexpr auto ports = "relational.port_count.v1";
-constexpr auto entity_types = "relational.entity_type_count.v1";
-constexpr auto relation_types = "relational.relation_type_count.v1";
-constexpr auto arities = "relational.arity_count.v1";
-constexpr auto components = "relational.component_count.v1";
-constexpr auto port_degrees = "relational.port_degree_count.v1";
+constexpr MetricSpec site_count{"state.symbol_count.v1", "categorical", "symbols"};
+constexpr MetricSpec entropy{"state.shannon_bits_per_symbol.v1", "categorical", "bits_per_symbol"};
+constexpr MetricSpec type_count{"state.type_count.v1", "categorical", "symbols"};
+constexpr MetricSpec compression_ratio{"state.rle_bytes_per_raw_byte.v1", "categorical", "bytes_per_byte"};
+constexpr MetricSpec longest_run{"state.longest_symbol_run.v1", "categorical", "symbols"};
+constexpr MetricSpec changed{"state.changed_sites.v1", "categorical", "sites"};
+constexpr MetricSpec recurrence{"state.recurrence_lag_snapshots.v1", "categorical", "snapshots"};
+constexpr MetricSpec lookback{"state.recurrence_lookback_snapshots.v1", "categorical", "snapshots"};
+constexpr MetricSpec event_count{"activity.events.v1", "events", "events"};
+constexpr MetricSpec births{"activity.births.v1", "events", "entities"};
+constexpr MetricSpec deaths{"activity.deaths.v1", "events", "entities"};
+constexpr MetricSpec observed_events{"activity.observed_events.v1", "events", "events"};
+constexpr MetricSpec reconstructed_events{"activity.reconstructed_events.v1", "events", "events"};
+constexpr MetricSpec entities{"relational.entity_count.v1", "relational", "entities"};
+constexpr MetricSpec relations{"relational.relation_count.v1", "relational", "relations"};
+constexpr MetricSpec ports{"relational.port_count.v1", "relational", "ports"};
+constexpr MetricSpec entity_types{"relational.entity_type_count.v1", "relational", "entities"};
+constexpr MetricSpec relation_types{"relational.relation_type_count.v1", "relational", "relations"};
+constexpr MetricSpec arities{"relational.arity_count.v1", "relational", "relations"};
+constexpr MetricSpec components{"relational.component_count.v1", "relational", "components"};
+constexpr MetricSpec port_degrees{"relational.port_degree_count.v1", "relational", "entities"};
+constexpr MetricSpec logical_updates{"work.logical_updates.v1", "ledger", "updates"};
+constexpr MetricSpec reads{"work.reads.v1", "ledger", "reads"};
+constexpr MetricSpec writes{"work.writes.v1", "ledger", "writes"};
+constexpr MetricSpec rng_draws{"work.rng_draws.v1", "ledger", "draws"};
+constexpr MetricSpec live_state_bytes{"resource.live_state_bytes.v1", "ledger", "bytes"};
+constexpr MetricSpec peak_state_bytes{"resource.peak_state_bytes.v1", "ledger", "bytes"};
+
+constexpr std::array catalog{
+    site_count, entropy, type_count, compression_ratio, longest_run, changed, recurrence, lookback,
+    entities, relations, ports, entity_types, relation_types, arities, components, port_degrees,
+    event_count, births, deaths, observed_events, reconstructed_events,
+    logical_updates, reads, writes, rng_draws, live_state_bytes, peak_state_bytes,
+};
 
 std::uint64_t longest_symbol_run(std::span<const TypeId> symbols) {
     std::uint64_t longest = 0, length = 0;
@@ -122,19 +136,44 @@ double rle_ratio(std::span<const TypeId> symbols) {
 }
 }
 
+std::span<const MetricSpec> metric_catalog() noexcept { return catalog; }
+
+const MetricSpec* find_metric(std::string_view id) noexcept {
+    const auto found = std::ranges::find(catalog, id, &MetricSpec::id);
+    return found == catalog.end() ? nullptr : &*found;
+}
+
 void evaluate(IObservationSource& source, const MetricSink& sink, EvalLimits limits) {
+    evaluate(source, sink, limits, {});
+}
+
+void evaluate(IObservationSource& source, const MetricSink& sink, EvalLimits limits,
+              std::span<const std::string_view> selected) {
+    for (const auto id : selected) {
+        if (!find_metric(id)) {
+            throw Error(ErrorCode::invalid, "unknown metric ID: " + std::string(id));
+        }
+    }
+    const auto wants = [&](const MetricSpec& metric) {
+        return selected.empty() || std::ranges::find(selected, metric.id) != selected.end();
+    };
+    const bool needs_history = wants(changed) || wants(recurrence) || wants(lookback);
     std::deque<Snapshot> history;
     std::size_t history_bytes = 0;
     std::optional<std::size_t> fixed_site_count;
     bool saw_snapshot = false;
     bool saw_relational = false;
     bool saw_events = false;
-    const auto emit = [&](auto stamp, const char* id, MetricValue value,
+    const auto emit = [&](std::optional<Stamp> stamp, const MetricSpec& metric, MetricValue value,
                           std::optional<TypeId> symbol = std::nullopt) {
-        sink({stamp, id, symbol, value, MetricStatus::valid});
+        if (wants(metric)) {
+            sink({stamp, std::string(metric.id), symbol, value, MetricStatus::valid});
+        }
     };
-    const auto missing = [&](auto stamp, const char* id, MetricStatus status) {
-        sink({stamp, id, std::nullopt, std::nullopt, status});
+    const auto missing = [&](std::optional<Stamp> stamp, const MetricSpec& metric, MetricStatus status) {
+        if (wants(metric)) {
+            sink({stamp, std::string(metric.id), std::nullopt, std::nullopt, status});
+        }
     };
 
     while (auto record = source.next()) {
@@ -142,24 +181,33 @@ void evaluate(IObservationSource& source, const MetricSink& sink, EvalLimits lim
         if (auto* snap = std::get_if<Snapshot>(&record->payload)) {
             saw_snapshot = true;
             const auto symbols = snap->symbols();
-            std::map<TypeId, std::uint64_t> histogram;
-            for (auto symbol : symbols) {
-                ++histogram[symbol];
-            }
             emit(stamp, site_count, std::uint64_t(symbols.size()));
-            emit(stamp, longest_run, longest_symbol_run(symbols));
-            double bits = 0;
-            for (auto [symbol, count] : histogram) {
-                const auto probability = static_cast<double>(count) / symbols.size();
-                bits -= probability * std::log2(probability);
-                emit(stamp, type_count, count, symbol);
+            if (wants(longest_run)) {
+                emit(stamp, longest_run, longest_symbol_run(symbols));
             }
-            if (symbols.empty()) {
-                missing(stamp, entropy, MetricStatus::insufficient_data);
-                missing(stamp, compression_ratio, MetricStatus::insufficient_data);
-            } else {
-                emit(stamp, entropy, bits);
-                emit(stamp, compression_ratio, rle_ratio(symbols));
+            if (wants(entropy) || wants(type_count)) {
+                std::map<TypeId, std::uint64_t> histogram;
+                for (const auto symbol : symbols) {
+                    ++histogram[symbol];
+                }
+                double bits = 0;
+                for (const auto [symbol, count] : histogram) {
+                    const auto probability = static_cast<double>(count) / symbols.size();
+                    bits -= probability * std::log2(probability);
+                    emit(stamp, type_count, count, symbol);
+                }
+                if (symbols.empty()) {
+                    missing(stamp, entropy, MetricStatus::insufficient_data);
+                } else {
+                    emit(stamp, entropy, bits);
+                }
+            }
+            if (wants(compression_ratio)) {
+                if (symbols.empty()) {
+                    missing(stamp, compression_ratio, MetricStatus::insufficient_data);
+                } else {
+                    emit(stamp, compression_ratio, rle_ratio(symbols));
+                }
             }
 
             if (!source.metadata().fixed_sites) {
@@ -173,25 +221,32 @@ void evaluate(IObservationSource& source, const MetricSink& sink, EvalLimits lim
                 throw Error(ErrorCode::invalid, "fixed-site snapshots differ in size");
             }
             fixed_site_count = symbols.size();
+            if (!needs_history) {
+                continue;
+            }
             emit(stamp, lookback, std::uint64_t(history.size()));
             if (history.empty()) {
                 const auto status = first ? MetricStatus::insufficient_data : MetricStatus::budget_exceeded;
                 missing(stamp, changed, status);
                 missing(stamp, recurrence, status);
             } else {
-                auto previous = history.back().symbols();
-                std::uint64_t changes = 0;
-                for (std::size_t i = 0; i < symbols.size(); ++i) {
-                    changes += symbols[i] != previous[i];
-                }
-                emit(stamp, changed, changes);
-                std::uint64_t lag = 1;
-                for (auto it = history.rbegin(); it != history.rend(); ++it, ++lag) {
-                    if (std::ranges::equal(symbols, it->symbols())) {
-                        break;
+                if (wants(changed)) {
+                    const auto previous = history.back().symbols();
+                    std::uint64_t changes = 0;
+                    for (std::size_t i = 0; i < symbols.size(); ++i) {
+                        changes += symbols[i] != previous[i];
                     }
+                    emit(stamp, changed, changes);
                 }
-                emit(stamp, recurrence, lag <= history.size() ? lag : 0);
+                if (wants(recurrence)) {
+                    std::uint64_t lag = 1;
+                    for (auto it = history.rbegin(); it != history.rend(); ++it, ++lag) {
+                        if (std::ranges::equal(symbols, it->symbols())) {
+                            break;
+                        }
+                    }
+                    emit(stamp, recurrence, lag <= history.size() ? lag : 0);
+                }
             }
 
             if (symbols.size_bytes() > limits.recurrence_bytes || limits.recurrence_snapshots == 0) {
@@ -209,31 +264,38 @@ void evaluate(IObservationSource& source, const MetricSink& sink, EvalLimits lim
             emit(stamp, entities, std::uint64_t(graph->entities().size()));
             emit(stamp, relations, std::uint64_t(graph->relations().size()));
             emit(stamp, ports, std::uint64_t(graph->ports().size()));
-            std::map<TypeId, std::uint64_t> entity_histogram, relation_histogram, arity_histogram;
-            for (const auto& entity : graph->entities()) {
-                ++entity_histogram[entity.type];
+            if (wants(entity_types)) {
+                std::map<TypeId, std::uint64_t> histogram;
+                for (const auto& entity : graph->entities()) {
+                    ++histogram[entity.type];
+                }
+                for (const auto& [kind, count] : histogram) {
+                    emit(stamp, entity_types, count, kind);
+                }
             }
-            for (const auto& relation : graph->relations()) {
-                ++relation_histogram[relation.type];
-                ++arity_histogram[relation.port_count];
+            if (wants(relation_types) || wants(arities)) {
+                std::map<TypeId, std::uint64_t> type_histogram, arity_histogram;
+                for (const auto& relation : graph->relations()) {
+                    ++type_histogram[relation.type];
+                    ++arity_histogram[relation.port_count];
+                }
+                for (const auto& [kind, count] : type_histogram) {
+                    emit(stamp, relation_types, count, kind);
+                }
+                for (const auto& [arity, count] : arity_histogram) {
+                    emit(stamp, arities, count, arity);
+                }
             }
-            for (const auto& [kind, count] : entity_histogram) {
-                emit(stamp, entity_types, count, kind);
-            }
-            for (const auto& [kind, count] : relation_histogram) {
-                emit(stamp, relation_types, count, kind);
-            }
-            for (const auto& [arity, count] : arity_histogram) {
-                emit(stamp, arities, count, arity);
-            }
-            const auto incidence = measure_incidence(*graph);
-            emit(stamp, components, incidence.component_count);
-            if (!incidence.degree_counts.empty() &&
-                incidence.degree_counts.rbegin()->first > std::numeric_limits<TypeId>::max()) {
-                missing(stamp, port_degrees, MetricStatus::budget_exceeded);
-            } else {
-                for (const auto& [degree, count] : incidence.degree_counts) {
-                    emit(stamp, port_degrees, count, static_cast<TypeId>(degree));
+            if (wants(components) || wants(port_degrees)) {
+                const auto incidence = measure_incidence(*graph);
+                emit(stamp, components, incidence.component_count);
+                if (!incidence.degree_counts.empty() &&
+                    incidence.degree_counts.rbegin()->first > std::numeric_limits<TypeId>::max()) {
+                    missing(stamp, port_degrees, MetricStatus::budget_exceeded);
+                } else {
+                    for (const auto& [degree, count] : incidence.degree_counts) {
+                        emit(stamp, port_degrees, count, static_cast<TypeId>(degree));
+                    }
                 }
             }
         } else if (const auto* counts = std::get_if<EventCounts>(&record->payload)) {
@@ -259,27 +321,19 @@ void evaluate(IObservationSource& source, const MetricSink& sink, EvalLimits lim
             emit(stamp, observed_events, observed);
             emit(stamp, reconstructed_events, totals.events - observed);
         } else if (const auto* ledger = std::get_if<WorkLedger>(&record->payload)) {
-            emit(stamp, "work.logical_updates.v1", ledger->logical_updates);
-            emit(stamp, "work.reads.v1", ledger->reads);
-            emit(stamp, "work.writes.v1", ledger->writes);
-            emit(stamp, "work.rng_draws.v1", ledger->rng_draws);
-            emit(stamp, "resource.live_state_bytes.v1", ledger->live_state_bytes);
-            emit(stamp, "resource.peak_state_bytes.v1", ledger->peak_state_bytes);
+            emit(stamp, logical_updates, ledger->logical_updates);
+            emit(stamp, reads, ledger->reads);
+            emit(stamp, writes, ledger->writes);
+            emit(stamp, rng_draws, ledger->rng_draws);
+            emit(stamp, live_state_bytes, ledger->live_state_bytes);
+            emit(stamp, peak_state_bytes, ledger->peak_state_bytes);
         }
     }
-    if (!saw_snapshot) {
-        for (auto id : {site_count, entropy, type_count, compression_ratio, longest_run, changed, recurrence, lookback}) {
-            missing(std::nullopt, id, MetricStatus::unsupported);
-        }
-    }
-    if (!saw_relational) {
-        for (auto id : {entities, relations, ports, entity_types, relation_types, arities, components, port_degrees}) {
-            missing(std::nullopt, id, MetricStatus::unsupported);
-        }
-    }
-    if (!saw_events) {
-        for (auto id : {event_count, births, deaths, observed_events, reconstructed_events}) {
-            missing(std::nullopt, id, MetricStatus::unsupported);
+    for (const auto& metric : catalog) {
+        if ((metric.channel == "categorical" && !saw_snapshot) ||
+            (metric.channel == "relational" && !saw_relational) ||
+            (metric.channel == "events" && !saw_events)) {
+            missing(std::nullopt, metric, MetricStatus::unsupported);
         }
     }
 }

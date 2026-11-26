@@ -1,0 +1,12 @@
+{
+  "protocol": "E01-tier0-registry-v1",
+  "scope": "catalog and opt-in selection for the existing versioned tier-0 diagnostics",
+  "checks": {
+    "catalog": "list exactly 27 existing unique IDs with their channel and unit without opening a trace",
+    "compatibility": "the default program and API preserve prior rows and order; selected output equals a stable subsequence of default output",
+    "selection": "check multiple channels, valid, unsupported, insufficient_data and budget_exceeded rows, idempotent duplicate selections, and unknown IDs rejected before reading",
+    "validation": "selected evaluation still reads the whole trace, validates fixed-site shape, and rejects malformed suffixes",
+    "install": "repeat the checks on Linux x86-64, Linux arm64 and macOS arm64 and exercise the public catalog from the installed package"
+  },
+  "limits": "fixed built-in tier-0 catalog; dependency scheduling, artifact cache, scientific estimators and calibration are outside this slice"
+}

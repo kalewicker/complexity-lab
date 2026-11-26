@@ -328,6 +328,38 @@ void mock_graph_replay(const std::filesystem::path& directory) {
             "mock graph live/trace diagnostic mismatch");
 }
 
+void selected_metrics(const std::filesystem::path& directory) {
+    const auto path = directory / "metric-selection.cltr";
+    const clab::Metadata meta{"selection", "binary-u32", "step", true, true};
+    const clab::Snapshot snapshot(std::array<clab::TypeId, 1>{0});
+    clab::TraceWriter writer(path, meta);
+    writer.append({{}, snapshot});
+    writer.append({{1, 1, 1}, snapshot});
+    writer.finish();
+
+    clab::TraceReader trace(path);
+    const std::array<std::string_view, 1> unknown{"unknown.v1"};
+    expect_error(clab::ErrorCode::invalid, [&] {
+        clab::evaluate(trace, [](const clab::MetricRow&) {
+            throw std::runtime_error("unknown metric produced a row");
+        }, {}, unknown);
+    });
+    require(trace.chunks_read() == 0, "unknown metric selection consumed input");
+
+    const std::array<std::string_view, 2> selected{
+        "state.recurrence_lag_snapshots.v1", "state.recurrence_lag_snapshots.v1",
+    };
+    std::vector<clab::MetricRow> rows;
+    clab::evaluate(trace, [&](const auto& row) { rows.push_back(row); }, {0, 0}, selected);
+    require(rows.size() == 2 && rows[0].id == selected[0] && rows[1].id == selected[0],
+            "duplicate metric selection duplicated rows");
+    require(rows[0].status == clab::MetricStatus::insufficient_data && !rows[0].value,
+            "selected recurrence missing history");
+    require(rows[1].status == clab::MetricStatus::budget_exceeded && !rows[1].value,
+            "selected recurrence budget status");
+    require(trace.status() == clab::TraceStatus::complete, "selection did not consume stream");
+}
+
 #ifdef CLAB_TEST_SUBSTRATES
 void replay() {
     expect_error(clab::ErrorCode::limit, [] { clab::BinaryCa world(9, 0, 71); });
@@ -364,6 +396,7 @@ int main() {
         provenance_round_trip(temp.path);
         attribute_round_trip(temp.path);
         mock_graph_replay(temp.path);
+        selected_metrics(temp.path);
 #ifdef CLAB_TEST_SUBSTRATES
         replay();
 #endif

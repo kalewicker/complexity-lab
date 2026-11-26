@@ -5,6 +5,7 @@
 #include <iostream>
 #include <locale>
 #include <string_view>
+#include <vector>
 
 namespace {
 void csv_text(std::ostream& out, std::string_view value) {
@@ -27,16 +28,50 @@ const char* status_name(clab::MetricStatus status) {
     }
     throw std::logic_error("unknown metric status");
 }
+
+int usage() {
+    std::cerr << "usage: clab-eval [--metric ID]... TRACE.cltr\n"
+              << "       clab-eval --list-metrics\n";
+    return 2;
+}
+
+void checked_flush(std::ostream& out) {
+    out.flush();
+    if (!out) {
+        throw clab::Error(clab::ErrorCode::io, "CSV output failed");
+    }
+}
 }
 
 int main(int argc, char** argv) {
-    if (argc != 2) {
-        std::cerr << "usage: clab-eval TRACE.cltr\n";
-        return 2;
-    }
     try {
-        clab::TraceReader trace(argv[1]);
         auto& out = std::cout;
+        if (argc == 2 && std::string_view(argv[1]) == "--list-metrics") {
+            out << "metric_id,channel,unit\n";
+            for (const auto& metric : clab::metric_catalog()) {
+                out << metric.id << ',' << metric.channel << ',' << metric.unit << '\n';
+            }
+            checked_flush(out);
+            return 0;
+        }
+        std::vector<std::string_view> selected;
+        int arg = 1;
+        while (arg < argc && std::string_view(argv[arg]) == "--metric") {
+            if (arg + 2 >= argc) {
+                return usage();
+            }
+            const std::string_view id = argv[arg + 1];
+            if (!clab::find_metric(id)) {
+                std::cerr << "clab-eval: unknown metric ID: " << id << '\n';
+                return 2;
+            }
+            selected.push_back(id);
+            arg += 2;
+        }
+        if (arg != argc - 1) {
+            return usage();
+        }
+        clab::TraceReader trace(argv[arg]);
         out.imbue(std::locale::classic());
         out << std::setprecision(std::numeric_limits<double>::max_digits10);
         out << "run_id,sequence,work,simulated_time,time_unit,encoding,exact,metric_id,symbol,value,status\n";
@@ -62,11 +97,8 @@ int main(int argc, char** argv) {
                 std::visit([&](auto value) { out << value; }, *row.value);
             }
             out << ',' << status_name(row.status) << '\n';
-        });
-        out.flush();
-        if (!out) {
-            throw clab::Error(clab::ErrorCode::io, "CSV output failed");
-        }
+        }, {}, selected);
+        checked_flush(out);
     } catch (const std::exception& error) {
         std::cerr << "clab-eval: " << error.what() << '\n';
         return 1;

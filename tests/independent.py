@@ -715,6 +715,88 @@ def check_wire_compatibility(args, directory):
     }
 
 
+def registry_fixture():
+    graph = relational_payload([(7, 1), (11, 2)], [(23, 1, 0, 2, 0)], [(7, 0), (11, 0)])
+    return (header()
+            + chunk(1, 0, 0, 0, struct.pack("<4I", 0, 0, 1, 1))
+            + chunk(4, 1, 0, 0, graph)
+            + chunk(2, 2, 0, 0, struct.pack("<3Q", 4, 2, 1))
+            + chunk(3, 3, 0, 0, struct.pack("<6Q", 0, 4, 0, 2, 16, 20))
+            + chunk(1, 4, 1, 1, struct.pack("<4I", 1, 1, 0, 0))
+            + chunk(0, 5, 1, 1))
+
+
+def check_registry(args, directory):
+    by_channel = {
+        "categorical": [
+            "state.symbol_count", "state.shannon_bits_per_symbol", "state.type_count",
+            "state.rle_bytes_per_raw_byte", "state.longest_symbol_run", "state.changed_sites",
+            "state.recurrence_lag_snapshots", "state.recurrence_lookback_snapshots",
+        ],
+        "relational": [
+            "relational.entity_count", "relational.relation_count", "relational.port_count",
+            "relational.entity_type_count", "relational.relation_type_count",
+            "relational.arity_count", "relational.component_count", "relational.port_degree_count",
+        ],
+        "events": [
+            "activity.events", "activity.births", "activity.deaths", "activity.observed_events",
+            "activity.reconstructed_events",
+        ],
+        "ledger": [
+            "work.logical_updates", "work.reads", "work.writes", "work.rng_draws",
+            "resource.live_state_bytes", "resource.peak_state_bytes",
+        ],
+    }
+    catalog = list(csv.DictReader(io.StringIO(run(args.eval, "--list-metrics"))))
+    expected = [(f"{name}.v1", channel) for channel, metrics in by_channel.items() for name in metrics]
+    assert [(row["metric_id"], row["channel"]) for row in catalog] == expected
+    assert all(row["unit"] for row in catalog)
+    assert len({row["metric_id"] for row in catalog}) == 27
+    assert catalog[1]["unit"] == "bits_per_symbol"
+    assert catalog[-1]["unit"] == "bytes"
+
+    trace = directory / "registry.cltr"
+    data = registry_fixture()
+    trace.write_bytes(data)
+    default_csv = run(args.eval, trace)
+    default_digest = hashlib.sha256(default_csv.encode()).hexdigest()
+    # Captured from the pre-registry G0 evaluator.
+    assert default_digest == "a1129d06e5de0595b308416bebc7fc7a1ee81029b107504ac6f5dd4ab8b2001b"
+    default = list(csv.DictReader(io.StringIO(default_csv)))
+
+    def select(*ids):
+        return run(args.eval, *(arg for metric_id in ids for arg in ("--metric", metric_id)), trace)
+
+    assert select(*(row["metric_id"] for row in catalog)) == default_csv
+    selected = ("resource.live_state_bytes.v1", "activity.observed_events.v1",
+                "activity.events.v1", "relational.port_degree_count.v1",
+                "state.recurrence_lag_snapshots.v1", "state.shannon_bits_per_symbol.v1",
+                "state.shannon_bits_per_symbol.v1")
+    rows = list(csv.DictReader(io.StringIO(select(*selected))))
+    assert rows == [row for row in default if row["metric_id"] in selected]
+    assert {row["status"] for row in rows} == {"valid", "unsupported", "insufficient_data"}
+    for metric_id in dict(expected):
+        per_metric = list(csv.DictReader(io.StringIO(select(metric_id))))
+        assert per_metric == [row for row in default if row["metric_id"] == metric_id]
+
+    for options in (("--metric", "unknown.v1", directory / "missing"),
+                    ("--metric",), ("--list-metrics", trace)):
+        assert not run(args.eval, *options, code=2)
+
+    trace.write_bytes(data[:-1])
+    run(args.eval, "--metric", "activity.events.v1", trace, code=1)
+    trace.write_bytes(header() + chunk(1, 0, 0, 0, struct.pack("<I", 0))
+                      + chunk(1, 1, 1, 1, struct.pack("<2I", 0, 1)) + chunk(0, 2, 1, 1))
+    run(args.eval, "--metric", "work.reads.v1", trace, code=1)
+    return {
+        "catalog_size": len(catalog),
+        "trace_sha256": hashlib.sha256(data).hexdigest(),
+        "default_csv_sha256": default_digest,
+        "selected_rows": len(rows),
+        "single_metric_projections": len(expected),
+    }
+
+
 def check(args, directory):
     assert crc32c(b"123456789") == 0xE3069283
     first = struct.pack("<4I", 0, 0, 1, 1)
@@ -794,6 +876,7 @@ def check(args, directory):
         "provenance": check_provenance(args, directory),
         "attributes": check_attributes(args, directory),
         "wire_compatibility": check_wire_compatibility(args, directory),
+        "registry": check_registry(args, directory),
     }
     assert result["categorical_sha256"] == "3dda44df0c60342ddd2b6456bbb350ea66a50141d86dc62ba4e887a0000fc9ba"
     assert result["events_sha256"] == "5f5e31d67be90e5eea677c262b01358df9cc2427ff86a17d975c44f4d34ddac1"
