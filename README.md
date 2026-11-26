@@ -16,7 +16,7 @@ build/release/clab-inspect --index build/demo/trace.cltr
 build/release/clab-eval build/demo/trace.cltr
 ```
 
-Choose a fresh directory for each fixture run. The demo records a tiny Rule 90 world under a five-sweep cap. The initial configure fetches the pinned MIT-licensed nlohmann/json 3.11.3 header and verifies its SHA-256. For an offline configure, set `-DCLAB_JSON_HEADER=/path/to/json.hpp` to a verified copy. The evaluator needs only a trace at runtime.
+Choose a fresh directory for each fixture run. For traces containing checkpoint references, `clab-inspect --checkpoints TRACE.cltr` lists their format, size and SHA-256. The demo records a tiny Rule 90 world under a five-sweep cap. The initial configure fetches the pinned MIT-licensed nlohmann/json 3.11.3 header and verifies its SHA-256. For an offline configure, set `-DCLAB_JSON_HEADER=/path/to/json.hpp` to a verified copy. The evaluator needs only a trace at runtime.
 
 ## Install without substrates
 
@@ -37,3 +37,4 @@ Applications can link to `clab::trace` and `clab::evaluator` through `find_packa
 - [Initial verification protocol](protocols/E00-initial.json)
 - [Initial verification](docs/E00-initial-results.md)
 - [Relational snapshot and index verification](docs/E00-relational-results.md)
+- [Detailed event and checkpoint reference verification](docs/E00-events-results.md)

@@ -1,0 +1,11 @@
+{
+  "protocol": "E00-events-v1",
+  "scope": "detailed event batches and content-addressed checkpoint references",
+  "checks": {
+    "round_trip": "preserve work stamps, event types, participants, creation/deletion lists, rule ID, provenance, opaque deltas, and checkpoint format/size/digest",
+    "independent": "an externally encoded two-event batch yields 2 events, 2 births, 1 death, 1 observed event and 1 reconstructed event, plus one accepted checkpoint reference",
+    "rejection": "reject malformed record lengths, counts, work stamps, flags, entity lists and checkpoint descriptors before indexing the failed chunk",
+    "compatibility": "preserve prior categorical, aggregate event, relational and mock trace digests and diagnostics; repeat the checks against the substrate-free install"
+  },
+  "limits": "wire format and tier-0 counts only; reference targets and scientific claims are outside this protocol"
+}

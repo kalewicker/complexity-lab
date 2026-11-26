@@ -2,6 +2,7 @@
 
 #include <nlohmann/json.hpp>
 
+#include <algorithm>
 #include <array>
 #include <bit>
 #include <cmath>
@@ -23,6 +24,12 @@ constexpr std::uint16_t snapshot_type = 1;
 constexpr std::uint16_t events_type = 2;
 constexpr std::uint16_t ledger_type = 3;
 constexpr std::uint16_t relational_type = 4;
+constexpr std::uint16_t event_batch_type = 5;
+constexpr std::uint16_t checkpoint_type = 6;
+constexpr std::size_t event_header_bytes = 40;
+constexpr std::size_t checkpoint_prefix_bytes = 44;
+constexpr std::size_t checkpoint_format_max = 128;
+constexpr std::uint32_t reconstructed_flag = 1;
 constexpr std::uint64_t relational_prefix = 12;
 constexpr std::uint64_t entity_row_bytes = 12;
 constexpr std::uint64_t relation_row_bytes = 24;
@@ -201,6 +208,141 @@ Bytes encode_relational(const RelationalSnapshot& snapshot, std::uint32_t chunk_
     }
     return bytes;
 }
+std::uint64_t event_body_size(std::uint64_t participants, std::uint64_t created,
+                              std::uint64_t deleted, std::uint64_t delta) {
+    const auto ids = checked_add(checked_add(participants, created), deleted);
+    return checked_add(checked_multiply(ids, sizeof(EntityId)), delta);
+}
+
+EventBatch decode_event_batch(const Bytes& bytes, WorkCount chunk_work) {
+    if (bytes.size() < sizeof(std::uint32_t)) {
+        throw Error(ErrorCode::invalid, "short event batch prefix");
+    }
+    const auto count = get<std::uint32_t>(bytes, 0);
+    std::size_t offset = sizeof(std::uint32_t);
+    if (count > (bytes.size() - offset) / event_header_bytes) {
+        throw Error(ErrorCode::invalid, "invalid event batch count");
+    }
+    std::vector<Event> events;
+    events.reserve(count);
+    for (std::uint32_t i = 0; i < count; ++i) {
+        if (bytes.size() - offset < event_header_bytes) {
+            throw Error(ErrorCode::invalid, "short detailed event header");
+        }
+        Event event;
+        event.work = get<WorkCount>(bytes, offset);
+        event.type = get<TypeId>(bytes, offset + 8);
+        const auto flags = get<std::uint32_t>(bytes, offset + 12);
+        const auto rule_id = get<std::uint64_t>(bytes, offset + 16);
+        const auto participants = get<std::uint32_t>(bytes, offset + 24);
+        const auto created = get<std::uint32_t>(bytes, offset + 28);
+        const auto deleted = get<std::uint32_t>(bytes, offset + 32);
+        const auto delta = get<std::uint32_t>(bytes, offset + 36);
+        offset += event_header_bytes;
+        if (flags > reconstructed_flag || event.work > chunk_work ||
+            event_body_size(participants, created, deleted, delta) > bytes.size() - offset) {
+            throw Error(ErrorCode::invalid, "invalid detailed event flags, work or length");
+        }
+        if (flags == reconstructed_flag) {
+            event.provenance = EventProvenance::reconstructed;
+        }
+        if (rule_id != 0) {
+            event.rule_id = rule_id;
+        }
+        const auto read_ids = [&](std::vector<EntityId>& ids, std::uint32_t size) {
+            ids.reserve(size);
+            for (std::uint32_t j = 0; j < size; ++j, offset += sizeof(EntityId)) {
+                ids.push_back(get<EntityId>(bytes, offset));
+            }
+        };
+        read_ids(event.participants, participants);
+        read_ids(event.created, created);
+        read_ids(event.deleted, deleted);
+        const auto state_delta = std::span(bytes).subspan(offset, delta);
+        event.delta.assign(state_delta.begin(), state_delta.end());
+        offset += delta;
+        events.push_back(std::move(event));
+    }
+    if (offset != bytes.size()) {
+        throw Error(ErrorCode::invalid, "trailing bytes in detailed event batch");
+    }
+    return EventBatch(events);
+}
+
+Bytes encode_event_batch(const EventBatch& batch, WorkCount chunk_work, std::uint32_t limit) {
+    const auto events = batch.events();
+    if (!events.empty() && events.back().work > chunk_work) {
+        throw Error(ErrorCode::invalid, "event work exceeds chunk work");
+    }
+    auto size = checked_add(sizeof(std::uint32_t), checked_multiply(events.size(), event_header_bytes));
+    for (const auto& event : events) {
+        size = checked_add(size, event_body_size(event.participants.size(), event.created.size(),
+                                                event.deleted.size(), event.delta.size()));
+    }
+    if (size > limit) {
+        throw Error(ErrorCode::limit, "detailed event batch byte cap exceeded");
+    }
+
+    Bytes bytes;
+    bytes.reserve(size);
+    put(bytes, static_cast<std::uint32_t>(events.size()));
+    for (const auto& event : events) {
+        put(bytes, event.work);
+        put(bytes, event.type);
+        put(bytes, event.provenance == EventProvenance::reconstructed ? reconstructed_flag : 0U);
+        put(bytes, event.rule_id.value_or(0));
+        put(bytes, static_cast<std::uint32_t>(event.participants.size()));
+        put(bytes, static_cast<std::uint32_t>(event.created.size()));
+        put(bytes, static_cast<std::uint32_t>(event.deleted.size()));
+        put(bytes, static_cast<std::uint32_t>(event.delta.size()));
+        for (const auto* ids : {&event.participants, &event.created, &event.deleted}) {
+            for (const auto id : *ids) {
+                put(bytes, id);
+            }
+        }
+        bytes.insert(bytes.end(), event.delta.begin(), event.delta.end());
+    }
+    return bytes;
+}
+
+void validate_checkpoint_ref(const CheckpointRef& ref) {
+    const auto valid_char = [](char ch) {
+        return (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') ||
+               (ch >= '0' && ch <= '9') || ch == '-' || ch == '_' || ch == '.';
+    };
+    if (ref.size_bytes == 0 || ref.format.empty() || ref.format.size() > checkpoint_format_max ||
+        !std::ranges::all_of(ref.format, valid_char)) {
+        throw Error(ErrorCode::invalid, "invalid checkpoint reference");
+    }
+}
+
+CheckpointRef decode_checkpoint_ref(const Bytes& bytes) {
+    if (bytes.size() < checkpoint_prefix_bytes) {
+        throw Error(ErrorCode::invalid, "short checkpoint reference");
+    }
+    const auto length = get<std::uint32_t>(bytes, 40);
+    if (length > checkpoint_format_max || bytes.size() - checkpoint_prefix_bytes != length) {
+        throw Error(ErrorCode::invalid, "invalid checkpoint format length");
+    }
+    CheckpointRef ref;
+    ref.size_bytes = get<std::uint64_t>(bytes, 0);
+    std::ranges::copy(std::span(bytes).subspan(8, ref.sha256.size()), ref.sha256.begin());
+    ref.format.assign(bytes.begin() + checkpoint_prefix_bytes, bytes.end());
+    validate_checkpoint_ref(ref);
+    return ref;
+}
+
+Bytes encode_checkpoint_ref(const CheckpointRef& ref) {
+    validate_checkpoint_ref(ref);
+    Bytes bytes;
+    bytes.reserve(checkpoint_prefix_bytes + ref.format.size());
+    put(bytes, ref.size_bytes);
+    bytes.insert(bytes.end(), ref.sha256.begin(), ref.sha256.end());
+    put(bytes, static_cast<std::uint32_t>(ref.format.size()));
+    bytes.insert(bytes.end(), ref.format.begin(), ref.format.end());
+    return bytes;
+}
+
 }
 
 struct TraceReader::Impl {
@@ -310,7 +452,7 @@ std::optional<ObservationRecord> TraceReader::next() {
                 throw Error(ErrorCode::invalid, "chunk checksum mismatch");
             }
             const ChunkIndexEntry entry{stamp, reader.next_offset, type, version, flags, size, crc};
-            if (type > relational_type || version != 1) {
+            if (type > checkpoint_type || version != 1) {
                 if (type != end_type && (flags & optional_chunk)) {
                     reader.accept(entry);
                     continue;
@@ -369,6 +511,16 @@ std::optional<ObservationRecord> TraceReader::next() {
             }
             case relational_type: {
                 ObservationRecord record{stamp, decode_relational(bytes)};
+                reader.accept(entry);
+                return record;
+            }
+            case event_batch_type: {
+                ObservationRecord record{stamp, decode_event_batch(bytes, stamp.work)};
+                reader.accept(entry);
+                return record;
+            }
+            case checkpoint_type: {
+                ObservationRecord record{stamp, decode_checkpoint_ref(bytes)};
                 reader.accept(entry);
                 return record;
             }
@@ -474,6 +626,12 @@ void TraceWriter::append(const ObservationRecord& record) {
     } else if (const auto* snapshot = std::get_if<RelationalSnapshot>(&record.payload)) {
         type = relational_type;
         bytes = encode_relational(*snapshot, writer.limits.chunk_bytes);
+    } else if (const auto* batch = std::get_if<EventBatch>(&record.payload)) {
+        type = event_batch_type;
+        bytes = encode_event_batch(*batch, record.stamp.work, writer.limits.chunk_bytes);
+    } else if (const auto* checkpoint = std::get_if<CheckpointRef>(&record.payload)) {
+        type = checkpoint_type;
+        bytes = encode_checkpoint_ref(*checkpoint);
     } else if (const auto* events = std::get_if<EventCounts>(&record.payload)) {
         type = events_type;
         validate_events(*events);

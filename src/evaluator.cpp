@@ -18,6 +18,8 @@ constexpr auto lookback = "state.recurrence_lookback_snapshots.v1";
 constexpr auto event_count = "activity.events.v1";
 constexpr auto births = "activity.births.v1";
 constexpr auto deaths = "activity.deaths.v1";
+constexpr auto observed_events = "activity.observed_events.v1";
+constexpr auto reconstructed_events = "activity.reconstructed_events.v1";
 constexpr auto entities = "relational.entity_count.v1";
 constexpr auto relations = "relational.relation_count.v1";
 constexpr auto ports = "relational.port_count.v1";
@@ -152,14 +154,30 @@ void evaluate(IObservationSource& source, const MetricSink& sink, EvalLimits lim
             emit(stamp, event_count, counts->events);
             emit(stamp, births, counts->births);
             emit(stamp, deaths, counts->deaths);
-        } else {
-            const auto& ledger = std::get<WorkLedger>(record->payload);
-            emit(stamp, "work.logical_updates.v1", ledger.logical_updates);
-            emit(stamp, "work.reads.v1", ledger.reads);
-            emit(stamp, "work.writes.v1", ledger.writes);
-            emit(stamp, "work.rng_draws.v1", ledger.rng_draws);
-            emit(stamp, "resource.live_state_bytes.v1", ledger.live_state_bytes);
-            emit(stamp, "resource.peak_state_bytes.v1", ledger.peak_state_bytes);
+            missing(stamp, observed_events, MetricStatus::unsupported);
+            missing(stamp, reconstructed_events, MetricStatus::unsupported);
+        } else if (const auto* batch = std::get_if<EventBatch>(&record->payload)) {
+            saw_events = true;
+            EventCounts totals;
+            std::uint64_t observed = 0;
+            for (const auto& event : batch->events()) {
+                ++totals.events;
+                totals.births = checked_add(totals.births, event.created.size());
+                totals.deaths = checked_add(totals.deaths, event.deleted.size());
+                observed += event.provenance == EventProvenance::observed;
+            }
+            emit(stamp, event_count, totals.events);
+            emit(stamp, births, totals.births);
+            emit(stamp, deaths, totals.deaths);
+            emit(stamp, observed_events, observed);
+            emit(stamp, reconstructed_events, totals.events - observed);
+        } else if (const auto* ledger = std::get_if<WorkLedger>(&record->payload)) {
+            emit(stamp, "work.logical_updates.v1", ledger->logical_updates);
+            emit(stamp, "work.reads.v1", ledger->reads);
+            emit(stamp, "work.writes.v1", ledger->writes);
+            emit(stamp, "work.rng_draws.v1", ledger->rng_draws);
+            emit(stamp, "resource.live_state_bytes.v1", ledger->live_state_bytes);
+            emit(stamp, "resource.peak_state_bytes.v1", ledger->peak_state_bytes);
         }
     }
     if (!saw_snapshot) {
@@ -173,7 +191,7 @@ void evaluate(IObservationSource& source, const MetricSink& sink, EvalLimits lim
         }
     }
     if (!saw_events) {
-        for (auto id : {event_count, births, deaths}) {
+        for (auto id : {event_count, births, deaths, observed_events, reconstructed_events}) {
             missing(std::nullopt, id, MetricStatus::unsupported);
         }
     }

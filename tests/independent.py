@@ -141,6 +141,79 @@ def check_relational(args, directory):
     }
 
 
+def detailed_record(work, event_type, flags=0, rule=0, participants=(), created=(),
+                    deleted=(), delta=b""):
+    ids = (*participants, *created, *deleted)
+    return (struct.pack("<QIIQ4I", work, event_type, flags, rule, len(participants),
+                        len(created), len(deleted), len(delta))
+            + struct.pack(f"<{len(ids)}Q", *ids) + delta)
+
+
+def check_temporal(args, directory):
+    encoded_events = (
+        detailed_record(2, 7, rule=19, participants=(1, 2), created=(2,), delta=b"\x00\xff"),
+        detailed_record(4, 8, flags=1, participants=(1, 3), created=(3,), deleted=(1,)),
+    )
+    events = struct.pack("<I", len(encoded_events)) + b"".join(encoded_events)
+    # No file with these bytes is needed by the decoder.
+    checkpoint = b"independent checkpoint content"
+    digest = hashlib.sha256(checkpoint)
+    fmt = b"fixture.checkpoint-v1"
+    ref = struct.pack("<Q32sI", len(checkpoint), digest.digest(), len(fmt)) + fmt
+    prefix = header(META | {"encoding": "temporal-fixture", "fixed_sites": False})
+    event_chunk = chunk(5, 0, 4, 4, events)
+    ref_chunk = chunk(6, 1, 4, 4, ref)
+    data = prefix + event_chunk + ref_chunk + chunk(0, 2, 4, 4)
+    trace = directory / "temporal.cltr"
+    trace.write_bytes(data)
+
+    rows = list(csv.DictReader(io.StringIO(run(args.eval, trace))))
+    counts = {"events": 2, "births": 2, "deaths": 1,
+              "observed_events": 1, "reconstructed_events": 1}
+    for metric_name, value in counts.items():
+        row = metric(rows, f"activity.{metric_name}.v1", 0)
+        assert (row["value"], row["status"]) == (str(value), "valid")
+    assert not any(row["sequence"] == "1" for row in rows)
+    refs = list(csv.DictReader(io.StringIO(run(args.inspect, "--checkpoints", trace))))
+    assert refs == [{"sequence": "1", "work": "4", "format": fmt.decode(),
+                     "size_bytes": str(len(checkpoint)), "sha256": digest.hexdigest()}]
+    trace.write_bytes(prefix + event_chunk + ref_chunk[:-1])
+    index = run(args.inspect, "--recover-prefix", "--index", trace, code=3)
+    assert [row["type"] for row in csv.DictReader(io.StringIO(index))] == ["5"]
+    assert not list(csv.DictReader(io.StringIO(
+        run(args.inspect, "--recover-prefix", "--checkpoints", trace, code=3))))
+
+    invalid_batches = [
+        b"",
+        struct.pack("<I", 0xffffffff),
+        struct.pack("<I", 2) + encoded_events[0] + encoded_events[1][:-1],
+        struct.pack("<I", 2) + b"".join(reversed(encoded_events)),
+        struct.pack("<I", 1) + detailed_record(5, 1),
+        struct.pack("<I", 1) + detailed_record(2, 1, flags=2),
+        struct.pack("<I", 1) + detailed_record(2, 1, participants=(0,)),
+        struct.pack("<I", 1) + detailed_record(2, 1, participants=(9, 9)),
+        struct.pack("<I", 1) + detailed_record(2, 1, created=(9,), deleted=(9,)),
+        struct.pack("<I", 1) + struct.pack("<QIIQ4I", 0, 0, 0, 0, 0, 0, 0, 0xffffffff),
+        events + b"trailing",
+    ]
+    invalid_refs = [b"", ref[:-1], ref + b"trailing", bytes(8) + ref[8:],
+                    ref[:40] + struct.pack("<I", 0),
+                    ref[:40] + struct.pack("<I", 129) + b"x" * 129,
+                    ref[:44] + b"/" + fmt[1:]]
+    for kind, payloads in ((5, invalid_batches), (6, invalid_refs)):
+        for malformed in payloads:
+            trace.write_bytes(prefix + chunk(kind, 0, 4, 4, malformed) + chunk(0, 1, 4, 4))
+            rejected = run(args.inspect, "--recover-prefix", "--index", trace, code=1)
+            assert not list(csv.DictReader(io.StringIO(rejected))), rejected
+    return {
+        "trace_sha256": hashlib.sha256(data).hexdigest(),
+        "checkpoint_sha256": digest.hexdigest(),
+        "counts": counts,
+        "invalid_event_batches_rejected": len(invalid_batches),
+        "invalid_checkpoint_refs_rejected": len(invalid_refs),
+    }
+
+
 def check(args, directory):
     assert crc32c(b"123456789") == 0xE3069283
     first = struct.pack("<4I", 0, 0, 1, 1)
@@ -179,6 +252,8 @@ def check(args, directory):
         assert (row["status"], row["value"]) == ("valid", value)
     assert metric(rows, "state.symbol_count.v1")["status"] == "unsupported"
     assert metric(rows, "state.symbol_count.v1")["value"] == ""
+    assert metric(rows, "activity.observed_events.v1", 0)["status"] == "unsupported"
+    assert metric(rows, "activity.reconstructed_events.v1", 0)["status"] == "unsupported"
 
     broken = directory / "broken.cltr"
     data = trace.read_bytes()
@@ -212,9 +287,11 @@ def check(args, directory):
         "event_checks": {"events": 7, "births": 2, "deaths": 3},
         "malformed_rejected": len(malformed),
         "relational": check_relational(args, directory),
+        "temporal": check_temporal(args, directory),
     }
     assert result["categorical_sha256"] == "3dda44df0c60342ddd2b6456bbb350ea66a50141d86dc62ba4e887a0000fc9ba"
     assert result["events_sha256"] == "5f5e31d67be90e5eea677c262b01358df9cc2427ff86a17d975c44f4d34ddac1"
+    assert result["relational"]["sha256"] == "b9d66dd6527a31254bd27f97840a345fde40c5b100507d0def7720ecd410412d"
     if args.fixture:
         output = directory / "mock"
         run(args.fixture, output)
@@ -230,7 +307,9 @@ def check(args, directory):
         assert {row["run_id"] for row in rows} == {planned["run_id"]}
         assert max(int(row["work"]) for row in rows if row["work"]) == 5
         assert metric(rows, "work.logical_updates.v1", 11)["value"] == "5"
-        result["mock"] = status | {"trace_sha256": hashlib.sha256(mock_trace.read_bytes()).hexdigest()}
+        mock_sha = hashlib.sha256(mock_trace.read_bytes()).hexdigest()
+        assert mock_sha == "890dcb152bc02ec22bb4754fefbd69a6bea966239fbdc87df7d3c72110780ff1"
+        result["mock"] = status | {"trace_sha256": mock_sha}
     return result
 
 

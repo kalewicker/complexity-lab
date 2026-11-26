@@ -2,6 +2,7 @@
 
 #include <clab/foundation.hpp>
 
+#include <array>
 #include <optional>
 #include <span>
 #include <variant>
@@ -81,13 +82,43 @@ struct EventCounts {
     bool operator==(const EventCounts&) const = default;
 };
 
+enum class EventProvenance { observed, reconstructed };
+
+struct Event {
+    WorkCount work{};
+    TypeId type{};
+    EventProvenance provenance{EventProvenance::observed};
+    std::optional<std::uint64_t> rule_id;
+    std::vector<EntityId> participants, created, deleted;
+    std::vector<std::uint8_t> delta;
+    bool operator==(const Event&) const = default;
+};
+
+class EventBatch {
+public:
+    explicit EventBatch(std::span<const Event> events);
+    [[nodiscard]] std::span<const Event> events() const & { return events_; }
+    std::span<const Event> events() const && = delete;
+
+private:
+    std::vector<Event> events_;
+};
+
+struct CheckpointRef {
+    std::string format;
+    std::uint64_t size_bytes{};
+    std::array<std::uint8_t, 32> sha256{};
+    bool operator==(const CheckpointRef&) const = default;
+};
+
 struct WorkLedger {
     std::uint64_t logical_updates{}, reads{}, writes{}, rng_draws{};
     std::uint64_t live_state_bytes{}, peak_state_bytes{};
     bool operator==(const WorkLedger&) const = default;
 };
 
-using Payload = std::variant<Snapshot, EventCounts, WorkLedger, RelationalSnapshot>;
+using Payload = std::variant<Snapshot, EventCounts, WorkLedger, RelationalSnapshot,
+                             EventBatch, CheckpointRef>;
 struct ObservationRecord {
     Stamp stamp;
     Payload payload;

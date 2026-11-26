@@ -119,6 +119,45 @@ void relational_round_trip(const std::filesystem::path& directory) {
     require(!reader.next() && reader.status() == clab::TraceStatus::complete, "relational end");
 }
 
+void temporal_round_trip(const std::filesystem::path& directory) {
+    using clab::EventProvenance;
+    const auto path = directory / "temporal.cltr";
+    std::array<clab::Event, 2> events{{
+        {3, 9, EventProvenance::observed, 7, {10, 12}, {12}, {10}, {1, 0, 255}},
+        {8, 10, EventProvenance::reconstructed, std::nullopt, {12}, {}, {}, {}},
+    }};
+    const clab::EventBatch batch(events);
+    const auto expected = events;
+    events[0].participants[0] = 12;
+    expect_error(clab::ErrorCode::invalid, [&] { (void)clab::EventBatch(events); });
+    clab::CheckpointRef ref{"tiny-ca.v1", 125, {}};
+    for (std::size_t i = 0; i < ref.sha256.size(); ++i) {
+        ref.sha256[i] = static_cast<std::uint8_t>(i * 7);
+    }
+    clab::TraceWriter writer(path, {"temporal", "fixture-v1", "step", false, false});
+    expect_error(clab::ErrorCode::invalid, [&] { writer.append({{0, 7, 7}, batch}); });
+    writer.append({{0, 8, 8}, batch});
+    auto invalid_ref = ref;
+    invalid_ref.format = "../checkpoint";
+    expect_error(clab::ErrorCode::invalid, [&] { writer.append({{1, 8, 8}, invalid_ref}); });
+    writer.append({{1, 8, 8}, ref});
+    writer.finish();
+    clab::TraceReader reader(path);
+    const auto record = reader.next();
+    require(record && std::ranges::equal(std::get<clab::EventBatch>(record->payload).events(),
+                                         expected), "event batch round trip");
+    const auto checkpoint = reader.next();
+    require(checkpoint && std::get<clab::CheckpointRef>(checkpoint->payload) == ref,
+            "checkpoint reference round trip");
+    require(!reader.next() && reader.status() == clab::TraceStatus::complete, "temporal end");
+
+    clab::TraceWriter capped(directory / "too-small.cltr",
+                             {"bounded", "fixture-v1", "step", true, false}, {4096, 64});
+    expect_error(clab::ErrorCode::limit, [&] { capped.append({{0, 8, 8}, batch}); });
+    capped.append({{}, clab::EventBatch({})});
+    capped.finish();
+}
+
 #ifdef CLAB_TEST_SUBSTRATES
 void replay() {
     expect_error(clab::ErrorCode::limit, [] { clab::BinaryCa world(9, 0, 71); });
@@ -151,6 +190,7 @@ int main() {
         TempDirectory temp;
         round_trips(temp.path);
         relational_round_trip(temp.path);
+        temporal_round_trip(temp.path);
 #ifdef CLAB_TEST_SUBSTRATES
         replay();
 #endif
