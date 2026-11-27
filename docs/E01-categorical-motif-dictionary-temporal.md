@@ -24,4 +24,4 @@ The pair paid 394 model bits, the first entry paid 197, and Huffman paid 1,047 m
 | CLTR fixture | `1dfe8acc287df2d0047b153ccdde9f3e749b8dac7856e264ce2f9246da938268` |
 | CSV report | `2329ed5eb01be0edd4603a9c97a74062bec519ae9a935257e811282e064c55af` |
 
-These results cover exact accounting and synthetic temporal transfer. Null calibration and structural scoring for the two-entry dictionary remain open.
+These results cover exact accounting and synthetic temporal transfer. The [shared-site permutation test](E01-categorical-motif-dictionary-site-permutation.md) evaluates the second entry's marginal gain under a site-history-preserving null. Population calibration and structural scoring remain open.

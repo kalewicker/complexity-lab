@@ -969,7 +969,7 @@ void temporal_permutation_budget(const std::filesystem::path& directory) {
     }
     writer.finish();
     // Shuffling can exceed the byte budget for run-length coding when runs are broken.
-    for (auto score : {clab::score_categorical_motif_permutations, clab::score_categorical_motif_site_permutations}) {
+    const auto check_budget = [&](auto score) {
         clab::TraceReader trace(path);
         const auto result = score(trace, {1, 1, 1, 64}, 19, 2, {64, 260});
         const auto failed = std::ranges::count_if(result.draws, [](const auto& draw) {
@@ -978,7 +978,10 @@ void temporal_permutation_budget(const std::filesystem::path& directory) {
         require(result.observed.costs && !result.at_least_observed && result.draws.size() == 19 &&
                 failed > 0 && failed < 19 && trace.status() == clab::TraceStatus::complete,
                 "a failed permutation must remain scheduled and suppress the rank");
-    }
+    };
+    check_budget(clab::score_categorical_motif_permutations);
+    check_budget(clab::score_categorical_motif_site_permutations);
+    check_budget(clab::score_categorical_motif_dictionary_site_permutations);
 }
 
 #ifdef CLAB_TEST_SUBSTRATES

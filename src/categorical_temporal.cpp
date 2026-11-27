@@ -125,6 +125,15 @@ std::optional<std::int64_t> TemporalCategoricalMotifCosts::charged_gain_bits() c
     return static_cast<std::int64_t>(baseline) - static_cast<std::int64_t>(model);
 }
 
+std::optional<std::int64_t> TemporalCategoricalDictionaryCosts::charged_gain_vs_first_bits() const {
+    if (!dictionary) {
+        return std::nullopt;
+    }
+    const auto first = checked_add(dictionary->first_test_bits, dictionary->first_model.length.total_bits());
+    const auto pair = checked_add(dictionary->test.total_bits(), dictionary->model.length.total_bits());
+    return static_cast<std::int64_t>(first) - static_cast<std::int64_t>(pair);
+}
+
 namespace {
 class TemporalMotifScorer {
 public:
@@ -156,29 +165,82 @@ private:
     std::optional<FrozenCategoricalMotif> motif_;
 };
 
+class TemporalDictionaryScorer {
+public:
+    void fit(std::span<const TypeId> training, std::size_t sites,
+             CodeLimits limits, TemporalCategoricalDictionaryCosts& costs) {
+        baseline_.emplace(FrozenCategoricalModel::fit(training, limits));
+        costs.baseline_model = baseline_->model_code();
+        model_ = FrozenCategoricalMotifDictionary::fit_frames(training, sites, limits);
+        if (model_) {
+            auto& dictionary = costs.dictionary.emplace();
+            dictionary.model = model_->model_code();
+            dictionary.first_model = model_->first_entry().model_code();
+        }
+    }
+
+    void score(std::span<const TypeId> test, CodeLimits limits, TemporalCategoricalDictionaryCosts& costs) const {
+        const auto encoded = baseline_->encode(test, limits);
+        costs.baseline_test_bits = checked_add(costs.baseline_test_bits, encoded.code.length.total_bits());
+        if (!model_) {
+            return;
+        }
+        auto& sums = *costs.dictionary;
+        const auto pair = model_->encode(test, limits);
+        const auto first = model_->first_entry().encode(test, limits);
+        sums.test.header_bits = checked_add(sums.test.header_bits, pair.encoded.length.header_bits);
+        sums.test.data_bits = checked_add(sums.test.data_bits, pair.encoded.length.data_bits);
+        sums.placement_bits = checked_add(sums.placement_bits, pair.placement_bits);
+        sums.first_test_bits = checked_add(sums.first_test_bits, first.code.length.total_bits());
+        for (std::size_t i = 0; i < pair.entries.size(); ++i) {
+            sums.occurrences[i] = checked_add(sums.occurrences[i], pair.entries[i].placements.size());
+        }
+    }
+
+private:
+    std::optional<FrozenCategoricalModel> baseline_;
+    std::optional<FrozenCategoricalMotifDictionary> model_;
+};
+
 struct MotifWindows {
     std::vector<TypeId> training, test;
 };
 
-TemporalCategoricalMotifResult score_motif_window(IObservationSource& source, TemporalCategoricalSplit split,
-                                                   CodeLimits limits, MotifWindows* windows = nullptr) {
-    TemporalMotifScorer scorer;
-    auto result = score_temporal<TemporalCategoricalMotifResult>(
+template <typename Result, typename Scorer>
+Result score_motif_window(IObservationSource& source, TemporalCategoricalSplit split,
+                          CodeLimits limits, MotifWindows* windows) {
+    Scorer scorer;
+    return score_temporal<Result>(
         source, split, limits, std::min(limits.symbols, categorical_iid_symbol_limit),
-        [&](std::span<const TypeId> training, TemporalCategoricalMotifCosts& costs) {
+        [&](std::span<const TypeId> training, auto& costs) {
             scorer.fit(training, split.sites, limits, costs);
             if (windows) {
                 windows->training.assign(training.begin(), training.end());
             }
         },
-        [&](std::span<const TypeId> test, TemporalCategoricalMotifCosts& costs) {
+        [&](std::span<const TypeId> test, auto& costs) {
             scorer.score(test, limits, costs);
             if (windows) {
                 windows->test.insert(windows->test.end(), test.begin(), test.end());
             }
         });
+}
+
+TemporalCategoricalMotifResult score_single_window(IObservationSource& source, TemporalCategoricalSplit split,
+                                                    CodeLimits limits, MotifWindows* windows = nullptr) {
+    auto result = score_motif_window<TemporalCategoricalMotifResult, TemporalMotifScorer>(source, split, limits, windows);
     if (result.costs && !result.costs->motif) {
         result.reason = "no_training_motif";
+    }
+    return result;
+}
+
+TemporalCategoricalDictionaryResult score_dictionary_window(
+    IObservationSource& source, TemporalCategoricalSplit split, CodeLimits limits, MotifWindows* windows = nullptr) {
+    auto result = score_motif_window<TemporalCategoricalDictionaryResult, TemporalDictionaryScorer>(
+        source, split, limits, windows);
+    if (result.costs && !result.costs->dictionary) {
+        result.reason = "no_training_dictionary";
     }
     return result;
 }
@@ -233,34 +295,34 @@ std::int64_t positive_gain(std::optional<std::int64_t> gain) {
     return std::max<std::int64_t>(0, gain.value_or(0));
 }
 
-TemporalMotifPermutationResult score_motif_permutations(IObservationSource& source,
-                                                        TemporalCategoricalSplit split,
-                                                        std::size_t count, std::uint64_t seed,
-                                                        CodeLimits limits, PermuteWindow permute) {
+template <typename Result, typename Scorer>
+Result score_motif_permutations(IObservationSource& source, TemporalCategoricalSplit split,
+                                std::size_t count, std::uint64_t seed, CodeLimits limits,
+                                PermuteWindow permute, auto score_window, auto charged_gain) {
     if (!count || count > temporal_motif_permutation_limit) {
         throw Error(ErrorCode::invalid, "temporal motif permutation draw count is outside its bounds");
     }
     MotifWindows windows;
-    TemporalMotifPermutationResult result;
-    result.observed = score_motif_window(source, split, limits, &windows);
+    Result result;
+    result.observed = score_window(source, split, limits, &windows);
     if (!result.observed.costs) {
         return result;
     }
-    const auto observed = positive_gain(result.observed.costs->charged_gain_bits());
+    const auto observed = positive_gain(((*result.observed.costs).*charged_gain)());
     result.draws.reserve(count);
     std::size_t at_least = 0;
     bool complete = true;
     for (std::size_t draw = 0; draw < count; ++draw) {
         const auto permuted = permute(windows, split.sites, seed);
-        TemporalMotifScorer scorer;
-        TemporalCategoricalMotifCosts costs;
+        Scorer scorer;
+        typename decltype(result.observed.costs)::value_type costs;
         try {
             scorer.fit(permuted.training, split.sites, limits, costs);
             const auto test = std::span(permuted.test);
             for (std::size_t offset = 0; offset < test.size(); offset += split.sites) {
                 scorer.score(test.subspan(offset, split.sites), limits, costs);
             }
-            const auto gain = costs.charged_gain_bits();
+            const auto gain = (costs.*charged_gain)();
             at_least += positive_gain(gain) >= observed;
             result.draws.push_back({MetricStatus::valid, gain});
         } catch (const Error& error) {
@@ -281,59 +343,37 @@ TemporalMotifPermutationResult score_motif_permutations(IObservationSource& sour
 TemporalCategoricalMotifResult score_categorical_motif_temporal(IObservationSource& source,
                                                                  TemporalCategoricalSplit split,
                                                                  CodeLimits limits) {
-    return score_motif_window(source, split, limits);
+    return score_single_window(source, split, limits);
 }
 
 TemporalCategoricalDictionaryResult score_categorical_motif_dictionary_temporal(
     IObservationSource& source, TemporalCategoricalSplit split, CodeLimits limits) {
-    std::optional<FrozenCategoricalModel> baseline;
-    std::optional<FrozenCategoricalMotifDictionary> model;
-    auto result = score_temporal<TemporalCategoricalDictionaryResult>(
-        source, split, limits, std::min(limits.symbols, categorical_iid_symbol_limit),
-        [&](std::span<const TypeId> training, TemporalCategoricalDictionaryCosts& costs) {
-            baseline.emplace(FrozenCategoricalModel::fit(training, limits));
-            costs.baseline_model = baseline->model_code();
-            model = FrozenCategoricalMotifDictionary::fit_frames(training, split.sites, limits);
-            if (model) {
-                auto& dictionary = costs.dictionary.emplace();
-                dictionary.model = model->model_code();
-                dictionary.first_model = model->first_entry().model_code();
-            }
-        },
-        [&](std::span<const TypeId> test, TemporalCategoricalDictionaryCosts& costs) {
-            const auto encoded = baseline->encode(test, limits);
-            costs.baseline_test_bits = checked_add(costs.baseline_test_bits, encoded.code.length.total_bits());
-            if (!model) {
-                return;
-            }
-            auto& sums = *costs.dictionary;
-            const auto pair = model->encode(test, limits);
-            const auto first = model->first_entry().encode(test, limits);
-            sums.test.header_bits = checked_add(sums.test.header_bits, pair.encoded.length.header_bits);
-            sums.test.data_bits = checked_add(sums.test.data_bits, pair.encoded.length.data_bits);
-            sums.placement_bits = checked_add(sums.placement_bits, pair.placement_bits);
-            sums.first_test_bits = checked_add(sums.first_test_bits, first.code.length.total_bits());
-            for (std::size_t i = 0; i < pair.entries.size(); ++i) {
-                sums.occurrences[i] = checked_add(sums.occurrences[i], pair.entries[i].placements.size());
-            }
-        });
-    if (result.costs && !result.costs->dictionary) {
-        result.reason = "no_training_dictionary";
-    }
-    return result;
+    return score_dictionary_window(source, split, limits);
 }
 
 TemporalMotifPermutationResult score_categorical_motif_permutations(IObservationSource& source,
                                                                      TemporalCategoricalSplit split,
                                                                      std::size_t count, std::uint64_t seed,
                                                                      CodeLimits limits) {
-    return score_motif_permutations(source, split, count, seed, limits, permute_independent_frames);
+    return score_motif_permutations<TemporalMotifPermutationResult, TemporalMotifScorer>(
+        source, split, count, seed, limits, permute_independent_frames,
+        score_single_window, &TemporalCategoricalMotifCosts::charged_gain_bits);
 }
 
 TemporalMotifPermutationResult score_categorical_motif_site_permutations(IObservationSource& source,
                                                                           TemporalCategoricalSplit split,
                                                                           std::size_t count, std::uint64_t seed,
                                                                           CodeLimits limits) {
-    return score_motif_permutations(source, split, count, seed, limits, permute_shared_sites);
+    return score_motif_permutations<TemporalMotifPermutationResult, TemporalMotifScorer>(
+        source, split, count, seed, limits, permute_shared_sites,
+        score_single_window, &TemporalCategoricalMotifCosts::charged_gain_bits);
+}
+
+TemporalDictionaryPermutationResult score_categorical_motif_dictionary_site_permutations(
+    IObservationSource& source, TemporalCategoricalSplit split, std::size_t count,
+    std::uint64_t seed, CodeLimits limits) {
+    return score_motif_permutations<TemporalDictionaryPermutationResult, TemporalDictionaryScorer>(
+        source, split, count, seed, limits, permute_shared_sites,
+        score_dictionary_window, &TemporalCategoricalDictionaryCosts::charged_gain_vs_first_bits);
 }
 }

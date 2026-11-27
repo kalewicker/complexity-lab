@@ -83,6 +83,7 @@ install(FILES docs/cltr-v1.md docs/G0-closeout.md docs/E01-categorical-codes.md
     docs/E01-categorical-motif-dictionary.md
     docs/E01-categorical-motif-dictionary-heldout.md
     docs/E01-categorical-motif-dictionary-temporal.md
+    docs/E01-categorical-motif-dictionary-site-permutation.md
     DESTINATION "${CMAKE_INSTALL_DOCDIR}")
 install(EXPORT CLabTargets NAMESPACE clab:: DESTINATION "${CMAKE_INSTALL_LIBDIR}/cmake/CLab")
 configure_package_config_file(cmake/CLabConfig.cmake.in

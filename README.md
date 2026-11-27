@@ -26,6 +26,7 @@ build/release/clab-eval --categorical-motif build/demo/trace.cltr
 build/release/clab-eval --categorical-motif-dictionary build/demo/trace.cltr
 build/release/clab-eval --categorical-motif-dictionary-heldout 4 1 4 build/demo/trace.cltr
 build/release/clab-eval --categorical-motif-dictionary-temporal 2 1 2 4 build/demo/trace.cltr
+build/release/clab-eval --categorical-motif-dictionary-site-permutation 2 1 2 4 19 42 build/demo/trace.cltr
 build/release/clab-eval --categorical-motif-heldout 4 1 4 build/demo/trace.cltr
 build/release/clab-eval --categorical-motif-temporal 2 1 2 4 build/demo/trace.cltr
 build/release/clab-eval --categorical-motif-permutation 2 1 2 4 19 42 build/demo/trace.cltr
@@ -83,6 +84,7 @@ For attributed relational traces, `clab-inspect --metadata` lists the schema and
 - [Two-entry categorical motif dictionary](docs/E01-categorical-motif-dictionary.md)
 - [Held-out two-entry dictionary](docs/E01-categorical-motif-dictionary-heldout.md)
 - [Temporal transfer of a two-entry dictionary](docs/E01-categorical-motif-dictionary-temporal.md)
+- [Shared-site permutation test for the second entry](docs/E01-categorical-motif-dictionary-site-permutation.md)
 - [Frozen categorical motif transfer](docs/E01-categorical-motif-heldout.md)
 - [Temporal categorical motif transfer](docs/E01-categorical-motif-temporal.md)
 - [Temporal motif permutation test](docs/E01-categorical-motif-permutation.md)

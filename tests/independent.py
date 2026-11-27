@@ -1849,6 +1849,89 @@ def check_categorical_motif_site_permutation(args, directory):
     }
 
 
+def check_dictionary_site_permutation(args, directory):
+    trace = directory / "categorical-motif-dictionary-site-permutation.cltr"
+    mode = "--categorical-motif-dictionary-site-permutation"
+    train, guard, test, sites = split = (4, 1, 3, 36)
+    count, seed = 19, 42
+    a, b = list(range(1, 7)), list(range(7, 13))
+    frames = []
+    for i in range(train + guard + test + 1):
+        nuisance = list(range(100 + i*24, 124 + i*24))
+        frames.append(a + nuisance[:2] + b + nuisance[2:] + [999])
+    data = write_temporal_steps(trace, frames)
+    output = run(args.eval, mode, *split, count, seed, trace)
+    row, = csv.DictReader(io.StringIO(output))
+    observed, = csv.DictReader(io.StringIO(
+        run(args.eval, "--categorical-motif-dictionary-temporal", *split, trace)))
+    assert all(row[key] == value for key, value in observed.items())
+    assert row["permutation_id"] == "categorical.two_motif_shared_site_permutation.v1"
+    assert row["status"] == "valid" and row["second_occurrences"] == "3"
+    # Three six-label matches save 3 * 192 literal bits. Each costs 10 placement bits.
+    assert row["statistic_bits"] == row["charged_gain_vs_first_bits"] == str(3 * (192 - 10) - 197)
+    assert row["statistic_bits"] != row["charged_gain_vs_baseline_bits"]
+    scored_indices = [*range(train), *range(train + guard, train + guard + test)]
+
+    def histories(source):
+        return Counter(tuple(source[i][site] for i in scored_indices) for site in range(sites))
+
+    words = splitmix64_words(seed)
+    scores = []
+    for _ in range(count):
+        order = shuffle_positions(range(sites), words)
+        surrogate = [frame[:] for frame in frames]
+        for i in scored_indices:
+            surrogate[i][:sites] = [frames[i][index] for index in order]
+            assert Counter(surrogate[i][:sites]) == Counter(frames[i][:sites])
+        assert histories(surrogate) == histories(frames)
+        write_temporal_steps(trace, surrogate)
+        replay, = csv.DictReader(io.StringIO(
+            run(args.eval, "--categorical-motif-dictionary-temporal", *split, trace)))
+        assert replay["status"] == "valid"
+        scores.append(replay["charged_gain_vs_first_bits"] or "absent")
+    assert 0 < scores.count("absent") < count
+    assert row["draw_gains_bits"].split() == scores
+    extreme = sum(score != "absent" and int(score) >= int(row["statistic_bits"]) for score in scores)
+    assert tuple(int(row[key]) for key in (
+        "draws_requested", "draws_complete", "draws_no_training_dictionary", "draws_budget_exceeded",
+        "extreme_draws", "p_numerator", "p_denominator",
+    )) == (count, count, scores.count("absent"), 0, extreme, extreme + 1, count + 1)
+
+    changed = [frame[:sites] + [3000 + i] for i, frame in enumerate(frames)]
+    changed[train], changed[-1] = [88] * (sites + 1), [99] * (sites + 1)
+    write_temporal_steps(trace, changed)
+    assert run(args.eval, mode, *split, count, seed, trace) == output
+
+    first_only = [a, a, b, b, [9] * 6, a, a]
+    write_temporal_steps(trace, first_only)
+    control, = csv.DictReader(io.StringIO(run(args.eval, mode, 4, 1, 2, 6, count, seed, trace)))
+    assert control["charged_gain_vs_first_bits"] == "-199" and control["statistic_bits"] == "0"
+    assert control["draw_gains_bits"].split() == ["-199"] * count
+    assert control["p_numerator"] == control["p_denominator"] == str(count + 1)
+    absent, = csv.DictReader(io.StringIO(run(args.eval, mode, 4, 1, 2, 1, count, seed, trace)))
+    assert absent["reason"] == "no_training_dictionary" and absent["statistic_bits"] == "0"
+    assert absent["draw_gains_bits"].split() == ["absent"] * count
+    assert absent["p_numerator"] == absent["p_denominator"] == str(count + 1)
+
+    write_temporal_steps(trace, frames[:3])
+    short, = csv.DictReader(io.StringIO(run(args.eval, mode, *split, count, seed, trace)))
+    assert short["status"] == "insufficient_data" and short["draws_complete"] == "0"
+    assert not any(short[key] for key in ("statistic_bits", "p_numerator", "p_denominator", "draw_gains_bits"))
+    assert not run(args.eval, mode, *split, 0, seed, trace, code=2)
+    trace.write_bytes(data[:-1])
+    assert not run(args.eval, mode, *split, count, seed, trace, code=1)
+    return {
+        "trace_sha256": hashlib.sha256(data).hexdigest(),
+        "csv_sha256": hashlib.sha256(output.encode()).hexdigest(),
+        "statistic_bits": int(row["statistic_bits"]),
+        "rank": [extreme + 1, count + 1],
+        "absent_draws": scores.count("absent"),
+        "draw_gains_bits": scores,
+        "first_only_charged_gain_bits": int(control["charged_gain_vs_first_bits"]),
+        "first_only_rank": [int(control[key]) for key in ("p_numerator", "p_denominator")],
+    }
+
+
 def check_motif_calibration_runner(args, directory):
     from calibrate_motifs import roster, upper_bound_millionths
 
@@ -2316,6 +2399,7 @@ def check(args, directory):
         "categorical_dictionary_temporal": check_categorical_dictionary_temporal(args, directory),
         "categorical_motif_permutation": check_categorical_motif_permutation(args, directory),
         "categorical_motif_site_permutation": check_categorical_motif_site_permutation(args, directory),
+        "dictionary_site_permutation": check_dictionary_site_permutation(args, directory),
         "motif_calibration_runner": check_motif_calibration_runner(args, directory),
         "site_calibration_runner": check_site_calibration_runner(args, directory),
     }

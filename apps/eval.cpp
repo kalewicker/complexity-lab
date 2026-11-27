@@ -51,6 +51,7 @@ int usage() {
               << "       clab-eval --categorical-motif-heldout TRAIN GUARD TEST TRACE.cltr\n"
               << "       clab-eval --categorical-motif-dictionary-heldout TRAIN GUARD TEST TRACE.cltr\n"
               << "       clab-eval --categorical-motif-dictionary-temporal TRAIN GUARD TEST SITES TRACE.cltr\n"
+              << "       clab-eval --categorical-motif-dictionary-site-permutation TRAIN GUARD TEST SITES DRAWS SEED TRACE.cltr\n"
               << "       clab-eval --categorical-heldout TRAIN GUARD TEST TRACE.cltr\n"
               << "       clab-eval --categorical-motif-temporal TRAIN GUARD TEST SITES TRACE.cltr\n"
               << "       clab-eval --categorical-motif-permutation TRAIN GUARD TEST SITES DRAWS SEED TRACE.cltr\n"
@@ -511,35 +512,21 @@ void report_temporal(clab::TraceReader& trace, std::ostream& out, clab::Temporal
     checked_flush(out);
 }
 
-void report_dictionary_temporal(clab::TraceReader& trace, std::ostream& out, clab::TemporalCategoricalSplit split) {
-    const auto result = clab::score_categorical_motif_dictionary_temporal(trace, split);
-    write_temporal_prefix(out, trace.metadata(), split, result, clab::categorical_frozen_dictionary_code_id,
-                          dictionary_cost_columns);
-    out << ',' << clab::categorical_frozen_code_id << ',';
-    if (const auto& costs = result.costs) {
-        const ModelAndTestBits baseline{costs->baseline_model.length.total_bits(), costs->baseline_test_bits};
-        if (const auto& pair = costs->dictionary) {
-            write_dictionary_costs(out, pair->test, pair->model.length.total_bits(), pair->placement_bits,
-                                   pair->occurrences, {pair->first_model.length.total_bits(), pair->first_test_bits},
-                                   baseline);
-        } else {
-            write_dictionary_baseline_only(out, baseline);
-        }
-    } else {
-        out << ",,,,,,,,,,,,,,";
-    }
-    out << ',' << status_name(result.status) << ',' << result.reason << '\n';
-    checked_flush(out);
-}
-
 struct PermutationOptions {
     std::size_t count;
     std::uint64_t seed;
     bool shared_sites;
 };
 
-void write_permutation_costs(std::ostream& out, const clab::TemporalMotifPermutationResult& result,
-                             PermutationOptions options) {
+void append_permutation_columns(std::string& columns, std::string_view absence_column) {
+    columns += ",permutation_id,seed,draws_requested,draws_complete,";
+    columns += absence_column;
+    columns += ",draws_budget_exceeded,statistic_bits,extreme_draws,p_numerator,p_denominator,draw_gains_bits";
+}
+
+template <typename Result, typename Gain>
+void write_permutation_costs(std::ostream& out, const Result& result, PermutationOptions options,
+                             std::string_view id, Gain charged_gain) {
     std::size_t complete = 0, absent = 0;
     for (const auto& draw : result.draws) {
         if (draw.status == clab::MetricStatus::valid) {
@@ -547,12 +534,10 @@ void write_permutation_costs(std::ostream& out, const clab::TemporalMotifPermuta
             absent += !draw.charged_gain_bits;
         }
     }
-    const auto id = options.shared_sites ? clab::temporal_motif_site_permutation_id
-                                         : clab::temporal_motif_permutation_id;
     out << ',' << id << ',' << options.seed << ',' << options.count
         << ',' << complete << ',' << absent << ',' << result.draws.size() - complete << ',';
     if (result.observed.costs) {
-        out << std::max<std::int64_t>(0, result.observed.costs->charged_gain_bits().value_or(0));
+        out << std::max<std::int64_t>(0, ((*result.observed.costs).*charged_gain)().value_or(0));
     }
     if (result.at_least_observed) {
         out << ',' << *result.at_least_observed << ',' << *result.at_least_observed + 1 << ',' << options.count + 1;
@@ -573,6 +558,39 @@ void write_permutation_costs(std::ostream& out, const clab::TemporalMotifPermuta
     }
 }
 
+void report_dictionary_temporal(clab::TraceReader& trace, std::ostream& out, clab::TemporalCategoricalSplit split,
+                                std::optional<PermutationOptions> options) {
+    const auto evaluation = options
+        ? clab::score_categorical_motif_dictionary_site_permutations(trace, split, options->count, options->seed)
+        : clab::TemporalDictionaryPermutationResult{
+            clab::score_categorical_motif_dictionary_temporal(trace, split), {}, {}};
+    const auto& result = evaluation.observed;
+    std::string columns(dictionary_cost_columns);
+    if (options) {
+        append_permutation_columns(columns, "draws_no_training_dictionary");
+    }
+    write_temporal_prefix(out, trace.metadata(), split, result, clab::categorical_frozen_dictionary_code_id, columns);
+    out << ',' << clab::categorical_frozen_code_id << ',';
+    if (const auto& costs = result.costs) {
+        const ModelAndTestBits baseline{costs->baseline_model.length.total_bits(), costs->baseline_test_bits};
+        if (const auto& pair = costs->dictionary) {
+            write_dictionary_costs(out, pair->test, pair->model.length.total_bits(), pair->placement_bits,
+                                   pair->occurrences, {pair->first_model.length.total_bits(), pair->first_test_bits},
+                                   baseline);
+        } else {
+            write_dictionary_baseline_only(out, baseline);
+        }
+    } else {
+        out << ",,,,,,,,,,,,,,";
+    }
+    if (options) {
+        write_permutation_costs(out, evaluation, *options, clab::temporal_dictionary_site_permutation_id,
+                                &clab::TemporalCategoricalDictionaryCosts::charged_gain_vs_first_bits);
+    }
+    out << ',' << status_name(result.status) << ',' << result.reason << '\n';
+    checked_flush(out);
+}
+
 void report_motif_temporal(clab::TraceReader& trace, std::ostream& out, clab::TemporalCategoricalSplit split,
                            std::optional<PermutationOptions> options = std::nullopt) {
     const auto score = options && options->shared_sites ? clab::score_categorical_motif_site_permutations
@@ -584,8 +602,7 @@ void report_motif_temporal(clab::TraceReader& trace, std::ostream& out, clab::Te
     std::string columns = "baseline_id,model_bits,test_header_bits,placement_bits,residual_bits,test_bits,"
                           "occurrences,baseline_model_bits,baseline_test_bits,conditional_gain_bits,charged_gain_bits";
     if (options) {
-        columns += ",permutation_id,seed,draws_requested,draws_complete,draws_no_training_motif,"
-                   "draws_budget_exceeded,statistic_bits,extreme_draws,p_numerator,p_denominator,draw_gains_bits";
+        append_permutation_columns(columns, "draws_no_training_motif");
     }
     write_temporal_prefix(out, trace.metadata(), split, result, clab::categorical_frozen_motif_code_id, columns);
     out << ',' << clab::categorical_frozen_code_id;
@@ -606,7 +623,9 @@ void report_motif_temporal(clab::TraceReader& trace, std::ostream& out, clab::Te
         out << ",,,,,,,,,,";
     }
     if (options) {
-        write_permutation_costs(out, evaluation, *options);
+        const auto id = options->shared_sites ? clab::temporal_motif_site_permutation_id
+                                              : clab::temporal_motif_permutation_id;
+        write_permutation_costs(out, evaluation, *options, id, &clab::TemporalCategoricalMotifCosts::charged_gain_bits);
     }
     out << ',' << status_name(result.status) << ',' << result.reason << '\n';
     checked_flush(out);
@@ -630,9 +649,10 @@ int main(int argc, char** argv) {
             }
             return 0;
         }
-        const bool shared_site_permutation = mode == "--categorical-motif-site-permutation";
+        const bool dictionary_permutation = mode == "--categorical-motif-dictionary-site-permutation";
+        const bool shared_site_permutation = mode == "--categorical-motif-site-permutation" || dictionary_permutation;
         const bool permutation = shared_site_permutation || mode == "--categorical-motif-permutation";
-        const bool dictionary_temporal = mode == "--categorical-motif-dictionary-temporal";
+        const bool dictionary_temporal = mode == "--categorical-motif-dictionary-temporal" || dictionary_permutation;
         if (mode == "--categorical-temporal" || mode == "--categorical-motif-temporal" ||
             dictionary_temporal || permutation) {
             if (argc != (permutation ? 9 : 7)) {
@@ -657,7 +677,7 @@ int main(int argc, char** argv) {
             clab::TraceReader trace(argv[permutation ? 8 : 6]);
             const clab::TemporalCategoricalSplit split{*train, *guard, *test, *sites};
             if (dictionary_temporal) {
-                report_dictionary_temporal(trace, out, split);
+                report_dictionary_temporal(trace, out, split, options);
             } else if (mode != "--categorical-temporal") {
                 report_motif_temporal(trace, out, split, options);
             } else {

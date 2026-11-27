@@ -136,6 +136,13 @@ int main(int argc, char** argv) {
             return 1;
         }
     }
+    clab::TraceReader dictionary_permutation_trace(path);
+    const auto dictionary_permutation = clab::score_categorical_motif_dictionary_site_permutations(
+        dictionary_permutation_trace, {1, 1, 1, 2}, 1, 0);
+    if (dictionary_permutation.observed.status != clab::MetricStatus::insufficient_data ||
+        !dictionary_permutation.draws.empty() || dictionary_permutation.at_least_observed) {
+        return 1;
+    }
     const auto stats = cache.stats();
     return stats.stores + stats.hits == 1 && found_entropy && found_entity && trace.status() == clab::TraceStatus::complete ? 0 : 1;
 }

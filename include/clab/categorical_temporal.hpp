@@ -65,6 +65,7 @@ struct TemporalCategoricalDictionaryCosts {
     std::uint64_t baseline_test_bits{};
     // A completed split can retain Huffman costs even when training admits no pair.
     std::optional<TemporalMotifDictionaryCosts> dictionary;
+    [[nodiscard]] std::optional<std::int64_t> charged_gain_vs_first_bits() const;
 };
 
 struct TemporalCategoricalDictionaryResult {
@@ -82,9 +83,12 @@ score_categorical_motif_dictionary_temporal(IObservationSource& source, Temporal
 inline constexpr std::size_t temporal_motif_permutation_limit = 199;
 inline constexpr std::string_view temporal_motif_permutation_id = "categorical.frame_permutation.v1";
 inline constexpr std::string_view temporal_motif_site_permutation_id = "categorical.shared_site_permutation.v1";
+inline constexpr std::string_view temporal_dictionary_site_permutation_id =
+    "categorical.two_motif_shared_site_permutation.v1";
 
 struct TemporalMotifPermutationDraw {
     MetricStatus status{MetricStatus::valid};
+    // The comparator is the one specified by the permutation method.
     std::optional<std::int64_t> charged_gain_bits;
 };
 
@@ -102,4 +106,14 @@ score_categorical_motif_permutations(IObservationSource& source, TemporalCategor
 [[nodiscard]] TemporalMotifPermutationResult
 score_categorical_motif_site_permutations(IObservationSource& source, TemporalCategoricalSplit split,
                                           std::size_t draws, std::uint64_t seed, CodeLimits limits = {});
+
+struct TemporalDictionaryPermutationResult {
+    TemporalCategoricalDictionaryResult observed;
+    std::vector<TemporalMotifPermutationDraw> draws;
+    std::optional<std::size_t> at_least_observed;
+};
+
+[[nodiscard]] TemporalDictionaryPermutationResult
+score_categorical_motif_dictionary_site_permutations(IObservationSource& source, TemporalCategoricalSplit split,
+                                                      std::size_t draws, std::uint64_t seed, CodeLimits limits = {});
 }

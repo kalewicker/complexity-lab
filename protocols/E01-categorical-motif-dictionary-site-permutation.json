@@ -1,0 +1,10 @@
+{
+  "protocol": "E01-categorical-motif-dictionary-site-permutation-v1",
+  "scope": "one temporal window under joint exchangeability of scored site histories",
+  "surrogate": "apply one shared Fisher-Yates site permutation to all scored training and test prefixes per draw; preserve complete site histories and frame histograms",
+  "pipeline": "refit the ordered dictionary and Huffman for every draw, including training admission; compare the admitted pair with its first entry alone on the same held-out frames",
+  "statistic": "positive part of the pair's charged gain against its first entry alone; a completed draw with no admitted pair contributes zero",
+  "rank": "count ties with more extreme values; retain signed draw gains and absent pairs; suppress the rank after any failed draw",
+  "verification": "independent shared-site replay, marginal no-second-entry control, missing inputs, and budget failures",
+  "limits": "engineering fixtures; joint site exchangeability is required for inference and population calibration remains open"
+}
