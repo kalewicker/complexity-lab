@@ -45,6 +45,14 @@ int main(int argc, char** argv) {
             motif.motif->encoded.bytes, motif.motif->encoded.length.total_bits()), motif_witness)) {
         return 1;
     }
+    const std::array<clab::TypeId, 12> dictionary_witness{1, 2, 9, 3, 4, 8, 1, 2, 7, 3, 4, 6};
+    const auto dictionary = clab::compare_categorical_motif_dictionary(dictionary_witness);
+    if (!dictionary.dictionary ||
+        !std::ranges::equal(clab::decode_categorical_motif_dictionary(
+            dictionary.dictionary->encoded.bytes, dictionary.dictionary->encoded.length.total_bits()),
+            dictionary_witness)) {
+        return 1;
+    }
     const auto frozen_motif = clab::FrozenCategoricalMotif::from_bytes(
         std::array<std::uint8_t, 9>{0x40, 0, 0, 0, 0x20, 0, 0, 0, 0x40}, 67);
     const std::array<clab::TypeId, 4> frozen_witness{1, 2, 1, 2};

@@ -694,6 +694,38 @@ void categorical_motif_fixtures() {
     });
 }
 
+void categorical_dictionary_fixtures() {
+    const std::vector<clab::TypeId> input{1, 2, 9, 3, 4, 8, 1, 2, 7, 3, 4, 6};
+    const auto comparison = clab::compare_categorical_motif_dictionary(input);
+    require(comparison.dictionary && comparison.selects_dictionary(), "two motif fixture selection");
+    const auto& pair = *comparison.dictionary;
+    const auto golden = hex_bytes("c3500000000800000012000000030000000452a21400000024000000200000001c00000018");
+    require(pair.entries[0].pattern == std::vector<clab::TypeId>{1, 2} &&
+            pair.entries[0].placements == std::vector<std::size_t>{0, 6} &&
+            pair.entries[1].pattern == std::vector<clab::TypeId>{3, 4} &&
+            pair.entries[1].placements == std::vector<std::size_t>{3, 9},
+            "two motif interleaved original-coordinate placement");
+    require(pair.encoded.bytes == golden && pair.encoded.length == clab::CodeLength{10, 134, 150} &&
+            pair.placement_bits == 22, "two motif golden frame");
+    require(clab::decode_categorical_motif_dictionary(golden, 294) == input, "two motif golden decode");
+    for (const auto& [hex, bits] : std::array<std::pair<std::string_view, std::uint64_t>, 4>{{
+             {"c3500000000800000012000000010000000252a214", 166}, // Duplicate definitions.
+             {"c3500000000800000012000000030000000452a940", 162}, // Across-entry overlap.
+             {"c3500000000800000012000000030000000452a21c", 166}, // Beyond the snapshot.
+             {"c3500000000800000012000000030000000452c8", 159},   // One occurrence.
+         }}) {
+        expect_error(clab::ErrorCode::invalid, [&] {
+            (void)clab::decode_categorical_motif_dictionary(hex_bytes(hex), bits);
+        });
+    }
+    expect_error(clab::ErrorCode::incomplete, [&] {
+        (void)clab::decode_categorical_motif_dictionary(golden, 293);
+    });
+    expect_error(clab::ErrorCode::limit, [&] {
+        (void)clab::decode_categorical_motif_dictionary(golden, 294, {11, 100});
+    });
+}
+
 void frozen_motif_fixtures() {
     const auto model = hex_bytes("400000002000000040");
     const auto frozen = clab::FrozenCategoricalMotif::from_bytes(model, 67);
@@ -927,6 +959,7 @@ int main() {
         iid_code_fixtures();
         categorical_comparison_fixtures();
         categorical_motif_fixtures();
+        categorical_dictionary_fixtures();
         frozen_motif_fixtures();
         categorical_heldout_fixtures();
         temporal_categorical_fixtures(temp.path);

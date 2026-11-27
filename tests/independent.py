@@ -1930,6 +1930,119 @@ def check_categorical_motif(args, directory):
     }
 
 
+def check_categorical_motif_dictionary(args, directory):
+    def gamma(value):
+        binary = f"{value:b}"
+        return "0" * (len(binary) - 1) + binary
+
+    def word(value):
+        return f"{value:032b}"
+
+    def stream(starts, width):
+        prior_ends = [0] + [start + width for start in starts[:-1]]
+        return gamma(len(starts)) + "".join(gamma(start - end + 1) for start, end in zip(starts, prior_ends))
+
+    def best_entry(sample, occupied, excluded=()):
+        found = {}
+        for width in range(2, 7):
+            for start in range(len(sample) - width + 1):
+                pattern = sample[start:start + width]
+                if pattern == excluded or occupied.intersection(range(start, start + width)):
+                    continue
+                starts = found.setdefault(pattern, [])
+                if not starts or starts[-1] + width <= start:
+                    starts.append(start)
+        choices = []
+        for pattern, starts in found.items():
+            if len(starts) < 2:
+                continue
+            width = len(pattern)
+            definition = gamma(width) + "".join(map(word, pattern))
+            payload = stream(starts, width)
+            cost = len(definition + payload) - 32 * width * len(starts)
+            choices.append(((cost, starts[0], width), pattern, starts, definition, payload))
+        return min(choices, default=None)
+
+    def covered(entry):
+        _, pattern, starts, _, _ = entry
+        return {i for start in starts for i in range(start, start + len(pattern))}
+
+    a, b = (1, 2, 3, 4, 5, 6), (1, 3, 5, 2, 4, 6)
+    repetition = [tuple(x for i in range(count) for x in (*a, 100+i)) for count in (1, 4, 16, 64)]
+    matched_repeat = tuple(x for i in range(24) for x in (*a, 100+i))
+    matched_pair = tuple(x for i in range(24) for x in (*(b if i % 2 else a), 100+i))
+    assert Counter(matched_repeat) == Counter(matched_pair)
+    relabeled = tuple(0xFFFFFFFF - x for x in matched_pair)
+    periodic = tuple(range(1, 13)) * 6
+    samples = [*repetition, matched_repeat, matched_pair, relabeled, periodic, (7,) * 4097, ()]
+    trace = directory / "categorical-motif-dictionary.cltr"
+    data = header(META | {"fixed_sites": False}) + b"".join(
+        chunk(1, i, i, i, struct.pack(f"<{len(sample)}I", *sample)) for i, sample in enumerate(samples)
+    ) + chunk(0, len(samples), len(samples) - 1, len(samples) - 1)
+    trace.write_bytes(data)
+    mode = "--categorical-motif-dictionary"
+    output = run(args.eval, mode, trace)
+    rows = list(csv.DictReader(io.StringIO(output)))
+    singles = list(csv.DictReader(io.StringIO(run(args.eval, "--categorical-motif", trace))))
+    assert len(rows) == len(singles) == len(samples)
+    bit_fields = ("dictionary_bits", "header_bits", "model_bits", "placement_bits", "residual_bits")
+    dictionary_fields = (*bit_fields, "first_occurrences", "second_occurrences",
+                         "gain_vs_single_bits", "gain_vs_baseline_bits")
+    for i, (sample, row, single) in enumerate(zip(samples, rows, singles)):
+        assert None not in row and None not in row.values()
+        assert row["sequence"] == row["work"] == str(i) and row["symbol_count"] == str(len(sample))
+        assert row["dictionary_id"] == "categorical.two_motif.v1"
+        assert (row["baseline_id"], row["baseline_bits"]) == (single["baseline_id"], single["baseline_bits"])
+        assert (row["single_model_bits"], row["single_bits"]) == (single["model_bits"], single["total_bits"])
+        if len(sample) > 4096:
+            assert row["status"] == "budget_exceeded" and not row["selected_entries"]
+            assert not any(row[key] for key in dictionary_fields)
+            continue
+        first = best_entry(sample, set())
+        second = best_entry(sample, covered(first), first[1]) if first else None
+        if not second:
+            assert row["status"] == ("no_second_motif" if first else "no_motif")
+            assert not any(row[key] for key in dictionary_fields)
+            assert row["selected_entries"] == ("1" if single["selected"] == "true" else "0")
+            continue
+        occupied = covered(first) | covered(second)
+        header_code = "110" + gamma(len(sample) + 1)
+        model_code = first[3] + second[3]
+        placements = first[4] + second[4]
+        residual = "".join(word(x) for j, x in enumerate(sample) if j not in occupied)
+        parts = tuple(map(len, (header_code, model_code, placements, residual)))
+        total = sum(parts)
+        single_gain, baseline_gain = int(row["single_bits"]) - total, int(row["baseline_bits"]) - total
+        assert row["status"] == "valid"
+        assert tuple(int(row[key]) for key in dictionary_fields) == (
+            total, *parts, len(first[2]), len(second[2]), single_gain, baseline_gain,
+        )
+        single_selected = single["selected"] == "true"
+        selected = 2 if min(single_gain, baseline_gain) > 0 else int(single_selected)
+        assert int(row["selected_entries"]) == selected
+        assert int(row["selected_definition_bits"]) == (0, int(row["single_model_bits"]), len(model_code))[selected]
+
+    assert [row["selected_entries"] for row in rows] == ["0", "1", "1", "1", "1", "2", "2", "0", "", "0"]
+    assert [row["selected_definition_bits"] for row in rows[:4]] == ["0", "197", "197", "197"]
+    assert rows[4]["baseline_bits"] == rows[5]["baseline_bits"]
+    assert tuple(int(rows[5][key]) for key in bit_fields) == (1356, 18, 394, 176, 768)
+    assert rows[7]["baseline_id"] == "categorical.periodic.v1" and int(rows[7]["gain_vs_baseline_bits"]) < 0
+    assert all(rows[5][key] == rows[6][key] for key in dictionary_fields)
+    trace.write_bytes(header() + chunk(2, 0, 0, 0, struct.pack("<3Q", 1, 0, 0)) + chunk(0, 1, 0, 0))
+    unsupported, = csv.DictReader(io.StringIO(run(args.eval, mode, trace)))
+    assert unsupported["status"] == "unsupported" and not unsupported["selected_entries"]
+    trace.write_bytes(data[:-1])
+    run(args.eval, mode, trace, code=1)
+    return {
+        "trace_sha256": hashlib.sha256(data).hexdigest(),
+        "csv_sha256": hashlib.sha256(output.encode()).hexdigest(),
+        "repetition_definition_bits": [int(row["selected_definition_bits"]) for row in rows[:4]],
+        "matched_repeat": {key: int(rows[4][key]) for key in
+                           ("baseline_bits", "single_bits", "selected_definition_bits")},
+        "matched_dictionary": {key: int(rows[5][key]) for key in ("baseline_bits", "single_bits", *dictionary_fields)},
+    }
+
+
 def check(args, directory):
     assert crc32c(b"123456789") == 0xE3069283
     first = struct.pack("<4I", 0, 0, 1, 1)
@@ -2018,6 +2131,7 @@ def check(args, directory):
         "categorical_heldout": check_categorical_heldout(args, directory),
         "categorical_temporal": check_categorical_temporal(args, directory),
         "categorical_motif": check_categorical_motif(args, directory),
+        "categorical_motif_dictionary": check_categorical_motif_dictionary(args, directory),
         "categorical_motif_heldout": check_categorical_motif_heldout(args, directory),
         "categorical_motif_temporal": check_categorical_motif_temporal(args, directory),
         "categorical_motif_permutation": check_categorical_motif_permutation(args, directory),

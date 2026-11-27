@@ -1,0 +1,8 @@
+{
+  "protocol": "E01-categorical-motif-dictionary-v1",
+  "scope": "in-sample categorical snapshots capped at 4096 symbols and two distinct contiguous definitions of width 2–6",
+  "search": "retain the exact best single motif and its leftmost disjoint placements; search the uncovered contiguous intervals for an additional motif with at least two disjoint placements; minimize the complete two-entry code with ties broken by first offset and then width",
+  "code": "charge family tag 110, original length, both definitions, both occurrence counts and gap streams in original coordinates, and uncovered u32 literals; choose the pair only when it strictly beats the single code and the complete five-family baseline",
+  "fixtures": "repeat one six-symbol tile with distinct separators at 1, 4, 16, and 64 copies; compare with two motifs at matched size and label counts; verify independent bit accounting, exact round trips, disjoint placement validation, relabeling, and installed conformance",
+  "limits": "bounded greedy dictionary engineering; no transfer or statistical calibration for the paired model, no hierarchy, and no structural score"
+}
