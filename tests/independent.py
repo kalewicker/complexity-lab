@@ -5,6 +5,7 @@ from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
 import hashlib
 import io
+from itertools import groupby
 import json
 import os
 import signal
@@ -964,6 +965,75 @@ def check_histogram_cache(args, directory):
     }
 
 
+def check_categorical_codes(args, directory):
+    sequences = [
+        [], [2**32 - 1], [3, 9, 3, 9, 3],
+        [17] * 40, [2] * 4 + [8] * 10 + [2] * 13,
+        [2, 7, 15, 2, 7, 15, 2, 7], list(range(20)),
+    ]
+    relabeled = [[symbol ^ 0xf10ff10f for symbol in values] for values in sequences]
+    data = header(META | {"fixed_sites": False})
+    all_samples = sequences + relabeled
+    for seq, values in enumerate(all_samples):
+        data += chunk(1, seq, seq, seq, struct.pack(f"<{len(values)}I", *values))
+    data += chunk(0, len(all_samples), len(all_samples) - 1, len(all_samples) - 1)
+    trace = directory / "categorical-codes.cltr"
+    trace.write_bytes(data)
+    actual_csv = run(args.eval, "--categorical-baselines", trace)
+    rows = list(csv.DictReader(io.StringIO(actual_csv)))
+
+    def reference(symbols):
+        def gamma(value):
+            assert value > 0
+            encoded = format(value, "b")
+            return "0" * (len(encoded) - 1) + encoded
+
+        def raw(values):
+            return "".join(format(value, "032b") for value in values)
+
+        header_bits = 2 + len(gamma(len(symbols) + 1))
+        if not symbols:
+            return [(header_bits, 0, 0)] * 4
+        alphabet = sorted(set(symbols))
+        period = next(step for step in range(1, len(symbols) + 1)
+                      if all(value == symbols[i % step] for i, value in enumerate(symbols)))
+        width = (len(alphabet) - 1).bit_length()
+        indices = "".join(format(alphabet.index(symbol), f"0{width}b")
+                          for symbol in symbols) if width else ""
+        runs = "".join(raw([label]) + gamma(len(list(group))) for label, group in groupby(symbols))
+        return [
+            (header_bits, 0, len(raw(symbols))),
+            (header_bits, len(gamma(len(alphabet)) + raw(alphabet)), len(indices)),
+            (header_bits, 0, len(runs)),
+            (header_bits, len(gamma(period) + raw(symbols[:period])), 0),
+        ]
+
+    ids = [f"categorical.{name}.v1" for name in ("raw", "uniform", "run_length", "periodic")]
+    assert len(rows) == len(all_samples) * len(ids)
+    for seq, symbols in enumerate(all_samples):
+        bounds = rows[seq * 4:seq * 4 + 4]
+        for code_id, row, lengths in zip(ids, bounds, reference(symbols)):
+            assert row["code_id"] == code_id and row["status"] == "valid"
+            assert row["sequence"] == row["work"] == str(seq)
+            assert row["symbol_count"] == str(len(symbols))
+            assert row["encoding"] == META["encoding"] and row["exact"] == "true"
+            actual = tuple(int(row[key]) for key in ("header_bits", "model_bits", "data_bits"))
+            assert actual == lengths and int(row["total_bits"]) == sum(lengths)
+
+    trace.write_bytes(header() + chunk(2, 0, 0, 0, struct.pack("<3Q", 2, 0, 1)) + chunk(0, 1, 0, 0))
+    unsupported = list(csv.DictReader(io.StringIO(run(args.eval, "--categorical-baselines", trace))))
+    assert [row["code_id"] for row in unsupported] == ids
+    assert all(row["status"] == "unsupported" and not row["total_bits"] for row in unsupported)
+    trace.write_bytes(data[:-1])
+    run(args.eval, "--categorical-baselines", trace, code=1)
+    return {
+        "trace_sha256": hashlib.sha256(data).hexdigest(),
+        "csv_sha256": hashlib.sha256(actual_csv.encode()).hexdigest(),
+        "independent_rows": len(rows),
+        "witness_total_bits": [sum(parts) for parts in reference(sequences[2])],
+    }
+
+
 def check(args, directory):
     assert crc32c(b"123456789") == 0xE3069283
     first = struct.pack("<4I", 0, 0, 1, 1)
@@ -1046,6 +1116,7 @@ def check(args, directory):
         "registry": check_registry(args, directory),
         "dependency_plan": check_dependency_plan(args),
         "histogram_cache": check_histogram_cache(args, directory),
+        "categorical_codes": check_categorical_codes(args, directory),
     }
     assert result["categorical_sha256"] == "3dda44df0c60342ddd2b6456bbb350ea66a50141d86dc62ba4e887a0000fc9ba"
     assert result["events_sha256"] == "5f5e31d67be90e5eea677c262b01358df9cc2427ff86a17d975c44f4d34ddac1"

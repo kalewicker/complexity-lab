@@ -1,0 +1,12 @@
+{
+  "protocol": "E01-categorical-codes-v1",
+  "scope": "four decodable reference codes for categorical snapshots with explicit bit accounting",
+  "checks": {
+    "round_trip": "raw, uniform-alphabet, run-length and finite-period codes round-trip empty, singleton, short randomized and structured u32 sequences",
+    "accounting": "check independent bitstreams for a fixed short sequence, including family and length, model and data bits",
+    "relabeling": "an injective u32 relabeling preserves every code length while decoding the new labels exactly",
+    "rejection": "truncation, nonzero final padding, impossible categorical indices, adjacent duplicate runs, impossible periods and resource caps fail explicitly",
+    "offline": "report exact lengths from independently authored traces without a substrate; preserve existing tier-0 output and run the cross-platform matrix"
+  },
+  "limits": "deterministic engineering baselines for categorical data only. Nonuniform IID, fitting and scientific interpretation are separate work."
+}

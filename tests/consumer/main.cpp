@@ -1,3 +1,4 @@
+#include <clab/categorical_code.hpp>
 #include <clab/evaluator.hpp>
 #include <clab/histogram_cache.hpp>
 #include <clab/trace.hpp>
@@ -16,6 +17,12 @@ int main(int argc, char** argv) {
     const std::array<std::string_view, 1> selected{entropy_spec->id};
     if (clab::plan_metrics(selected) !=
         std::vector<std::string>{"artifact.symbol_histogram.v1", std::string(entropy_spec->id)}) {
+        return 1;
+    }
+    const std::array<clab::TypeId, 3> witness{11, 19, 11};
+    const auto encoded = clab::encode_categorical(witness, clab::CategoricalCode::periodic);
+    if (clab::decode_categorical(encoded.bytes, encoded.length.total_bits()) !=
+        std::vector<clab::TypeId>(witness.begin(), witness.end())) {
         return 1;
     }
     const std::filesystem::path path(argv[1]);

@@ -1,3 +1,4 @@
+#include <clab/categorical_code.hpp>
 #include <clab/evaluator.hpp>
 #include <clab/trace.hpp>
 #ifdef CLAB_TEST_SUBSTRATES
@@ -6,6 +7,7 @@
 
 #include <algorithm>
 #include <array>
+#include <charconv>
 #include <stdlib.h>
 #include <unistd.h>
 #include <filesystem>
@@ -395,6 +397,98 @@ void selected_metrics(const std::filesystem::path& directory) {
     require(trace.status() == clab::TraceStatus::complete, "selection did not consume stream");
 }
 
+std::vector<std::uint8_t> hex_bytes(std::string_view source) {
+    require(source.size() % 2 == 0, "odd golden test hex");
+    std::vector<std::uint8_t> bytes;
+    for (std::size_t i = 0; i < source.size(); i += 2) {
+        unsigned byte{};
+        const auto* begin = source.data() + i;
+        const auto parsed = std::from_chars(begin, begin + 2, byte, 16);
+        require(parsed.ec == std::errc{} && parsed.ptr == begin + 2, "invalid golden test hex");
+        bytes.push_back(static_cast<std::uint8_t>(byte));
+    }
+    return bytes;
+}
+
+void categorical_code_fixtures() {
+    const std::array<clab::TypeId, 5> witness{3, 9, 3, 9, 3};
+    const std::array golden{
+        std::pair{clab::CodeLength{7, 0, 160}, "0c0000000600000012000000060000001200000006"},
+        std::pair{clab::CodeLength{7, 67, 5}, "4c80000000c000000254"},
+        std::pair{clab::CodeLength{7, 0, 165}, "8c000000070000000980000001c00000026000000070"},
+        std::pair{clab::CodeLength{7, 67, 0}, "cc80000000c000000240"},
+    };
+    for (std::size_t i = 0; i < golden.size(); ++i) {
+        const auto encoded = clab::encode_categorical(witness, clab::categorical_codes[i]);
+        const auto& [length, hex] = golden[i];
+        const auto expected = hex_bytes(hex);
+        require(encoded.length == length && encoded.bytes == expected, "categorical golden bytes or bits");
+        require(std::ranges::equal(clab::decode_categorical(expected, length.total_bits()), witness),
+                "categorical golden decode");
+    }
+
+    const auto check = [](std::span<const clab::TypeId> sequence) {
+        std::vector<clab::TypeId> relabeled;
+        for (const auto label : sequence) {
+            relabeled.push_back(label ^ 0xf10ff10fU);
+        }
+        for (const auto code : clab::categorical_codes) {
+            const auto original = clab::encode_categorical(sequence, code);
+            const auto changed = clab::encode_categorical(relabeled, code);
+            require(original.length == changed.length, "categorical label-dependent cost");
+            require(original.bytes.size() == (original.length.total_bits() + 7) / 8,
+                    "categorical byte length");
+            require(std::ranges::equal(clab::decode_categorical(original.bytes, original.length.total_bits()),
+                                       sequence), "categorical round trip");
+            require(clab::decode_categorical(changed.bytes, changed.length.total_bits()) == relabeled,
+                    "categorical relabeled round trip");
+        }
+    };
+    check({});
+    check(std::array{clab::TypeId{0xffffffffU}});
+    check(std::vector<clab::TypeId>(257, 7));
+    check(witness);
+    clab::Rng rng(145);
+    for (std::size_t count = 0; count < 128; ++count) {
+        std::vector<clab::TypeId> sample(count);
+        for (auto& symbol : sample) {
+            const auto random = static_cast<clab::TypeId>(rng.next());
+            symbol = count % 2 == 0 ? random % 7 : random;
+        }
+        check(sample);
+    }
+
+    const std::array malformed{
+        std::tuple{112ULL, "48c00000004000000080000000f0", clab::ErrorCode::invalid}, // index 3 of 3
+        std::tuple{71ULL, "980000002c00000016", clab::ErrorCode::invalid}, // split equal runs
+        std::tuple{8ULL, "db", clab::ErrorCode::invalid}, // period exceeds length
+        std::tuple{5ULL, "10", clab::ErrorCode::incomplete}, // missing symbol
+        std::tuple{4ULL, "20", clab::ErrorCode::invalid}, // extra data bit
+        std::tuple{3ULL, "21", clab::ErrorCode::invalid}, // bad padding
+    };
+    for (const auto& [length, hex, code] : malformed) {
+        const auto bytes = hex_bytes(hex);
+        expect_error(code, [&] { (void)clab::decode_categorical(bytes, length); });
+    }
+    const std::array<std::uint8_t, 9> overflow_gamma{};
+    expect_error(clab::ErrorCode::invalid, [&] {
+        (void)clab::decode_categorical(overflow_gamma, 72);
+    });
+    expect_error(clab::ErrorCode::limit, [&] {
+        (void)clab::encode_categorical(witness, clab::CategoricalCode::raw, {4, 64});
+    });
+    expect_error(clab::ErrorCode::limit, [&] {
+        (void)clab::encode_categorical(witness, clab::CategoricalCode::raw, {8, 1});
+    });
+    const auto encoded = clab::encode_categorical(witness, clab::CategoricalCode::periodic);
+    expect_error(clab::ErrorCode::limit, [&] {
+        (void)clab::decode_categorical(encoded.bytes, encoded.length.total_bits(), {4, 64});
+    });
+    expect_error(clab::ErrorCode::limit, [&] {
+        (void)clab::decode_categorical(encoded.bytes, encoded.length.total_bits(), {8, 1});
+    });
+}
+
 #ifdef CLAB_TEST_SUBSTRATES
 void replay() {
     expect_error(clab::ErrorCode::limit, [] { clab::BinaryCa world(9, 0, 71); });
@@ -433,6 +527,7 @@ int main() {
         mock_graph_replay(temp.path);
         dependency_resolution();
         selected_metrics(temp.path);
+        categorical_code_fixtures();
 #ifdef CLAB_TEST_SUBSTRATES
         replay();
 #endif
