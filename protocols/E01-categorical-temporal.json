@@ -1,0 +1,12 @@
+{
+  "protocol": "E01-categorical-temporal-v1",
+  "scope": "one frozen categorical code fit before a positive guard and scored over later fixed-site snapshots",
+  "checks": {
+    "split": "count categorical snapshots only; use first TRAIN/GUARD/TEST windows and prefix SITE count; ignore guard symbols, site suffix and later tail",
+    "accounting": "charge the serialized model once; sum separately framed test snapshots and raw references; preserve time and sequence boundaries",
+    "frozen": "guard or tail mutation changes no cost; a changed first test snapshot cannot alter the model or savings on the following frame",
+    "status": "reject varying declared fixed-site shape and corrupt trailing input; report insufficient data for short windows, missing sites or repeated time; report unsupported for absent or nonfixed sites and enforce resource limits",
+    "install": "verify the API, independent fixture and unchanged earlier outputs on all three conformance platforms"
+  },
+  "limits": "engineering fixture for observed snapshot order and disjoint regions. No claim of statistical independence, temporal prediction, or scientific calibration."
+}

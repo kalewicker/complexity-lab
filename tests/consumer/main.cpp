@@ -1,5 +1,6 @@
 #include <clab/categorical_code.hpp>
 #include <clab/categorical_heldout.hpp>
+#include <clab/categorical_temporal.hpp>
 #include <clab/evaluator.hpp>
 #include <clab/histogram_cache.hpp>
 #include <clab/trace.hpp>
@@ -75,6 +76,11 @@ int main(int argc, char** argv) {
             found_entity = row.value && std::get<std::uint64_t>(*row.value) == 1;
         }
     }, {}, {}, cache);
+    clab::TraceReader temporal_trace(path);
+    const auto temporal = clab::score_categorical_temporal(temporal_trace, {1, 1, 1, 2});
+    if (temporal.status != clab::MetricStatus::insufficient_data || temporal.train_seen != 1) {
+        return 1;
+    }
     const auto stats = cache.stats();
     return stats.stores + stats.hits == 1 && found_entropy && found_entity && trace.status() == clab::TraceStatus::complete ? 0 : 1;
 }

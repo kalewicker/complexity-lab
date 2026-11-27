@@ -48,7 +48,7 @@ target_include_directories(trace SYSTEM PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/pri
 clab_library(evaluator
     src/evaluator.cpp src/dependencies.cpp src/histogram_cache.cpp
     src/categorical_code.cpp src/categorical_iid.cpp src/categorical_comparison.cpp
-    src/categorical_heldout.cpp)
+    src/categorical_heldout.cpp src/categorical_temporal.cpp)
 target_link_libraries(evaluator PUBLIC observation)
 
 add_executable(clab-eval apps/eval.cpp)
@@ -75,6 +75,7 @@ install(DIRECTORY include/clab DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}"
     PATTERN substrate.hpp EXCLUDE)
 install(FILES docs/cltr-v1.md docs/G0-closeout.md docs/E01-categorical-codes.md
     docs/E01-categorical-iid.md docs/E01-baseline-comparison.md docs/E01-categorical-heldout.md
+    docs/E01-categorical-temporal.md
     DESTINATION "${CMAKE_INSTALL_DOCDIR}")
 install(EXPORT CLabTargets NAMESPACE clab:: DESTINATION "${CMAKE_INSTALL_LIBDIR}/cmake/CLab")
 configure_package_config_file(cmake/CLabConfig.cmake.in

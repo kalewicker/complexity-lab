@@ -1280,6 +1280,90 @@ def check_categorical_heldout(args, directory):
     }
 
 
+def check_categorical_temporal(args, directory):
+    trace = directory / "categorical-temporal.cltr"
+    frames = [[9, 3, 0], [9, 9, 0], [700, 701, 0], [9, 3, 0], [100, 9, 0], [800, 801, 0]]
+
+    def write_steps(snapshots, times=None, fixed=True):
+        if times is None:
+            times = list(range(len(snapshots)))
+        chunks = []
+        for i, (frame, time) in enumerate(zip(snapshots, times)):
+            if i in (1, 3):
+                seq = len(chunks)
+                chunks.append(chunk(2, seq, time, seq, struct.pack("<3Q", 1, 0, 0)))
+            seq = len(chunks)
+            chunks.append(chunk(1, seq, time, seq, struct.pack(f"<{len(frame)}I", *frame)))
+        data = (header(META | {"fixed_sites": fixed}) + b"".join(chunks)
+                + chunk(0, len(chunks), times[-1], len(chunks) - 1))
+        trace.write_bytes(data)
+        return data
+
+    def evaluate(*sizes):
+        row, = csv.DictReader(io.StringIO(run(args.eval, "--categorical-temporal",
+                                               *(sizes or (2, 1, 2, 2)), trace)))
+        return row
+
+    data = write_steps(frames)
+    output = run(args.eval, "--categorical-temporal", 2, 1, 2, 2, trace)
+    row, = csv.DictReader(io.StringIO(output))
+    assert row["status"] == "valid" and row["reason"] == ""
+    assert row["code_id"] == "categorical.frozen_huffman.v1" and row["exact"] == "true"
+    assert row["time_unit"] == "step"
+    assert [row[name] for name in ("train_seen", "guard_seen", "test_seen")] == ["2", "1", "2"]
+    assert [row[f"{anchor}_{field}"] for anchor in ("train_end", "test_start", "test_end")
+            for field in ("sequence", "work", "time")] == ["2", "2", "1", "5", "5", "3", "6", "6", "4"]
+    fields = ("model_bits", "test_header_bits", "test_data_bits", "test_bits", "raw_bits",
+              "unseen_symbols", "conditional_gain_bits", "charged_gain_bits")
+    # Frozen training [9,3,9,9] assigns 9=1, 3=00, escape=01.
+    # Each two-symbol frame pays three header bits. The two test payloads cost 3 and 35 bits.
+    expected = (71, 6, 38, 44, 134, 1, 90, 19)
+    assert tuple(int(row[name]) for name in fields) == expected, row
+
+    mutated = [frame[:2] + [900 + i] for i, frame in enumerate(frames)]
+    mutated[2] = [100, 100, 902]
+    mutated[-1] = [100, 100, 905]
+    write_steps(mutated)
+    assert evaluate() == row
+    mutated[3] = [100, 100, 903]
+    write_steps(mutated)
+    shifted = evaluate()
+    # First test now costs 2 escapes at 34 bits each. Last test stays at 35 data bits.
+    assert tuple(int(shifted[name]) for name in fields) == (71, 6, 103, 109, 134, 3, 25, -46)
+
+    def missing(expected_status, reason, *sizes):
+        actual = evaluate(*sizes)
+        assert (actual["status"], actual["reason"]) == (expected_status, reason), actual
+        assert not any(actual[name] for name in fields)
+        return actual
+
+    write_steps(frames[:4])
+    short = missing("insufficient_data", "too_few_snapshots")
+    assert short["test_seen"] == "1"
+    write_steps(frames, [0, 1, 1, 3, 4, 5])
+    missing("insufficient_data", "nonincreasing_time")
+    write_steps(frames)
+    missing("insufficient_data", "too_few_sites", 2, 1, 2, 4)
+    write_steps(frames, fixed=False)
+    missing("unsupported", "fixed_sites_required")
+    write_steps([[0] * 4097] * 3)
+    missing("budget_exceeded", "code_limit", 1, 1, 1, 4097)
+    trace.write_bytes(header() + chunk(2, 0, 0, 0, struct.pack("<3Q", 1, 0, 0)) + chunk(0, 1, 0, 0))
+    missing("unsupported", "no_categorical_snapshots")
+    write_steps(frames[:-1] + [[0]])
+    assert not run(args.eval, "--categorical-temporal", 2, 1, 2, 2, trace, code=1)
+    trace.write_bytes(data[:-1])
+    assert not run(args.eval, "--categorical-temporal", 2, 1, 2, 2, trace, code=1)
+    assert not run(args.eval, "--categorical-temporal", 2, 0, 2, 2, trace, code=2)
+    return {
+        "trace_sha256": hashlib.sha256(data).hexdigest(),
+        "csv_sha256": hashlib.sha256(output.encode()).hexdigest(),
+        "baseline_bits": list(expected),
+        "shifted_charged_gain": int(shifted["charged_gain_bits"]),
+        "test_boundaries": [int(row["test_start_sequence"]), int(row["test_end_sequence"])],
+    }
+
+
 def check(args, directory):
     assert crc32c(b"123456789") == 0xE3069283
     first = struct.pack("<4I", 0, 0, 1, 1)
@@ -1366,6 +1450,7 @@ def check(args, directory):
         "categorical_iid": check_categorical_iid(args, directory),
         "baseline_comparison": check_baseline_comparison(args, directory),
         "categorical_heldout": check_categorical_heldout(args, directory),
+        "categorical_temporal": check_categorical_temporal(args, directory),
     }
     assert result["categorical_sha256"] == "3dda44df0c60342ddd2b6456bbb350ea66a50141d86dc62ba4e887a0000fc9ba"
     assert result["events_sha256"] == "5f5e31d67be90e5eea677c262b01358df9cc2427ff86a17d975c44f4d34ddac1"

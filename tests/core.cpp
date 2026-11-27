@@ -1,5 +1,6 @@
 #include <clab/categorical_code.hpp>
 #include <clab/categorical_heldout.hpp>
+#include <clab/categorical_temporal.hpp>
 #include <clab/evaluator.hpp>
 #include <clab/trace.hpp>
 #ifdef CLAB_TEST_SUBSTRATES
@@ -691,6 +692,45 @@ void categorical_heldout_fixtures() {
     }
 }
 
+void temporal_categorical_fixtures(const std::filesystem::path& directory) {
+    using Sites = std::array<clab::TypeId, 2>;
+    const auto make_trace = [&](std::string_view name, Sites test_start) {
+        const auto path = directory / name;
+        clab::TraceWriter writer(path, {"temporal", "fixture", "step", true, true});
+        const std::array frames{Sites{9, 3}, Sites{9, 9}, Sites{700, 701}, test_start, Sites{100, 9}};
+        for (std::size_t i = 0; i < frames.size(); ++i) {
+            writer.append({{i, double(i), i}, clab::Snapshot(frames[i])});
+        }
+        writer.finish();
+        return path;
+    };
+
+    const auto baseline = make_trace("baseline-temporal.cltr", {9, 3});
+    const auto changed = make_trace("changed-temporal.cltr", {100, 100});
+    const clab::TemporalCategoricalSplit split{2, 1, 2, 2};
+    clab::TraceReader a(baseline), b(changed);
+    const auto before = clab::score_categorical_temporal(a, split);
+    const auto after = clab::score_categorical_temporal(b, split);
+    require(before.status == clab::MetricStatus::valid && after.status == clab::MetricStatus::valid &&
+            before.costs && after.costs, "temporal fixture status");
+    require(before.costs->model.bytes == hex_bytes("400000012c0000000e") &&
+            before.costs->model.length.total_bits() == 71 &&
+            after.costs->model.bytes == before.costs->model.bytes, "test data changed the fitted model");
+    require(before.costs->test_header_bits == 6 && before.costs->test_data_bits == 38 &&
+            after.costs->test_data_bits == 103 && before.costs->raw_bits == 134 &&
+            before.costs->unseen_symbols == 1 && after.costs->unseen_symbols == 3,
+            "temporal frame accounting or frozen test cost");
+    require(before.train_end == clab::Stamp{1, 1, 1} &&
+            before.test_start == clab::Stamp{3, 3, 3} &&
+            before.test_end == clab::Stamp{4, 4, 4}, "temporal boundaries");
+
+    clab::TraceReader bounded(baseline);
+    const auto limit = clab::score_categorical_temporal(bounded, split, {4, 8});
+    require(limit.status == clab::MetricStatus::budget_exceeded && !limit.costs &&
+            limit.test_seen == 2 && bounded.status() == clab::TraceStatus::complete,
+            "temporal budget must drain the trace");
+}
+
 #ifdef CLAB_TEST_SUBSTRATES
 void replay() {
     expect_error(clab::ErrorCode::limit, [] { clab::BinaryCa world(9, 0, 71); });
@@ -733,6 +773,7 @@ int main() {
         iid_code_fixtures();
         categorical_comparison_fixtures();
         categorical_heldout_fixtures();
+        temporal_categorical_fixtures(temp.path);
 #ifdef CLAB_TEST_SUBSTRATES
         replay();
 #endif

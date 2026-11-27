@@ -1,5 +1,6 @@
 #include <clab/categorical_code.hpp>
 #include <clab/categorical_heldout.hpp>
+#include <clab/categorical_temporal.hpp>
 #include <clab/evaluator.hpp>
 #include <clab/histogram_cache.hpp>
 #include <clab/trace.hpp>
@@ -42,7 +43,8 @@ int usage() {
               << "       clab-eval --categorical-baselines TRACE.cltr\n"
               << "       clab-eval --categorical-iid TRACE.cltr\n"
               << "       clab-eval --categorical-compare TRACE.cltr\n"
-              << "       clab-eval --categorical-heldout TRAIN GUARD TEST TRACE.cltr\n";
+              << "       clab-eval --categorical-heldout TRAIN GUARD TEST TRACE.cltr\n"
+              << "       clab-eval --categorical-temporal TRAIN GUARD TEST SITES TRACE.cltr\n";
     return 2;
 }
 
@@ -235,12 +237,67 @@ void report_heldout(clab::TraceReader& trace, std::ostream& out, HeldOutSplit sp
     checked_flush(out);
 }
 
+
+void report_temporal(clab::TraceReader& trace, std::ostream& out, clab::TemporalCategoricalSplit split) {
+    const auto result = clab::score_categorical_temporal(trace, split);
+    const auto& meta = trace.metadata();
+    out.imbue(std::locale::classic());
+    out << std::setprecision(std::numeric_limits<double>::max_digits10)
+        << "run_id,encoding,time_unit,exact,code_id,train_snapshots,guard_snapshots,test_snapshots,sites,"
+           "train_seen,guard_seen,test_seen,train_end_sequence,train_end_work,train_end_time,"
+           "test_start_sequence,test_start_work,test_start_time,test_end_sequence,test_end_work,"
+           "test_end_time,model_bits,test_header_bits,test_data_bits,test_bits,raw_bits,"
+           "unseen_symbols,conditional_gain_bits,charged_gain_bits,status,reason\n";
+    csv_text(out, meta.run_id);
+    out << ',';
+    csv_text(out, meta.encoding);
+    out << ',';
+    csv_text(out, meta.time_unit);
+    out << ',' << (meta.exact ? "true" : "false") << ',' << clab::categorical_frozen_code_id
+        << ',' << split.train_snapshots << ',' << split.guard_snapshots << ',' << split.test_snapshots
+        << ',' << split.sites << ',' << result.train_seen << ',' << result.guard_seen << ',' << result.test_seen;
+    for (const auto& stamp : {result.train_end, result.test_start, result.test_end}) {
+        out << ',';
+        if (stamp) {
+            out << stamp->sequence << ',' << stamp->work << ',' << stamp->simulated_time;
+        } else {
+            out << ",,";
+        }
+    }
+    if (const auto& costs = result.costs) {
+        const auto model = costs->model.length.total_bits();
+        const auto test = clab::checked_add(costs->test_header_bits, costs->test_data_bits);
+        const auto gain = static_cast<std::int64_t>(costs->raw_bits) - static_cast<std::int64_t>(test);
+        out << ',' << model << ',' << costs->test_header_bits << ',' << costs->test_data_bits
+            << ',' << test << ',' << costs->raw_bits << ',' << costs->unseen_symbols
+            << ',' << gain << ',' << gain - static_cast<std::int64_t>(model);
+    } else {
+        out << ",,,,,,,,";
+    }
+    out << ',' << status_name(result.status) << ',' << result.reason << '\n';
+    checked_flush(out);
+}
+
 }
 
 int main(int argc, char** argv) {
     try {
         auto& out = std::cout;
         const auto mode = argc > 1 ? std::string_view(argv[1]) : std::string_view{};
+        if (mode == "--categorical-temporal") {
+            if (argc != 7) {
+                return usage();
+            }
+            const auto train = parse_size(argv[2]), guard = parse_size(argv[3]);
+            const auto test = parse_size(argv[4]), sites = parse_size(argv[5]);
+            if (!train.value_or(0) || !guard.value_or(0) || !test.value_or(0) || !sites.value_or(0)) {
+                std::cerr << "clab-eval: categorical temporal sizes must be positive integers\n";
+                return 2;
+            }
+            clab::TraceReader trace(argv[6]);
+            report_temporal(trace, out, {*train, *guard, *test, *sites});
+            return 0;
+        }
         if (mode == "--categorical-heldout") {
             if (argc != 6) {
                 return usage();
