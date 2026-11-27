@@ -24,4 +24,4 @@ A C++ fixture put the first and second halves of a six-symbol pattern on opposit
 | CLTR fixture | `aa2189d2c32f2ad9ea48bf5f747f21a0a386ea70b7d2611c504e2c70e505d2fc` |
 | CSV report | `f5a595e5f583341b4319c6b97b290b1b7f2941c55a69b7c3f413a5a92c09781f` |
 
-The fixtures test sequence compression on synthetic later snapshots. Statistical independence, null calibration and structural scoring remain open.
+The fixtures test sequence compression on synthetic later snapshots. The [within-frame permutation test](E01-categorical-motif-permutation.md) compares this pipeline with a histogram-preserving null. Statistical independence, population calibration and structural scoring remain open.

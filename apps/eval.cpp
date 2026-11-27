@@ -6,12 +6,14 @@
 #include <clab/histogram_cache.hpp>
 #include <clab/trace.hpp>
 
+#include <algorithm>
 #include <charconv>
 #include <iomanip>
 #include <iostream>
 #include <limits>
 #include <locale>
 #include <optional>
+#include <string>
 #include <string_view>
 #include <vector>
 
@@ -48,6 +50,7 @@ int usage() {
               << "       clab-eval --categorical-motif-heldout TRAIN GUARD TEST TRACE.cltr\n"
               << "       clab-eval --categorical-heldout TRAIN GUARD TEST TRACE.cltr\n"
               << "       clab-eval --categorical-motif-temporal TRAIN GUARD TEST SITES TRACE.cltr\n"
+              << "       clab-eval --categorical-motif-permutation TRAIN GUARD TEST SITES DRAWS SEED TRACE.cltr\n"
               << "       clab-eval --categorical-temporal TRAIN GUARD TEST SITES TRACE.cltr\n";
     return 2;
 }
@@ -226,14 +229,15 @@ void report_categorical_motifs(clab::TraceReader& trace, std::ostream& out) {
     checked_flush(out);
 }
 
-std::optional<std::size_t> parse_size(std::string_view input) {
-    std::size_t size{};
+template <typename UInt = std::size_t>
+std::optional<UInt> parse_unsigned(std::string_view input) {
+    UInt value{};
     const auto end = input.data() + input.size();
-    const auto parsed = std::from_chars(input.data(), end, size);
+    const auto parsed = std::from_chars(input.data(), end, value);
     if (parsed.ec != std::errc{} || parsed.ptr != end) {
         return std::nullopt;
     }
-    return size;
+    return value;
 }
 
 struct HeldOutSplit {
@@ -387,11 +391,57 @@ void report_temporal(clab::TraceReader& trace, std::ostream& out, clab::Temporal
     checked_flush(out);
 }
 
-void report_motif_temporal(clab::TraceReader& trace, std::ostream& out, clab::TemporalCategoricalSplit split) {
-    const auto result = clab::score_categorical_motif_temporal(trace, split);
-    write_temporal_prefix(out, trace.metadata(), split, result, clab::categorical_frozen_motif_code_id,
-                          "baseline_id,model_bits,test_header_bits,placement_bits,residual_bits,test_bits,"
-                          "occurrences,baseline_model_bits,baseline_test_bits,conditional_gain_bits,charged_gain_bits");
+struct PermutationOptions {
+    std::size_t count;
+    std::uint64_t seed;
+};
+
+void write_permutation_costs(std::ostream& out, const clab::TemporalMotifPermutationResult& result,
+                             PermutationOptions options) {
+    std::size_t complete = 0, absent = 0;
+    for (const auto& draw : result.draws) {
+        if (draw.status == clab::MetricStatus::valid) {
+            ++complete;
+            absent += !draw.charged_gain_bits;
+        }
+    }
+    out << ',' << clab::temporal_motif_permutation_id << ',' << options.seed << ',' << options.count
+        << ',' << complete << ',' << absent << ',' << result.draws.size() - complete << ',';
+    if (result.observed.costs) {
+        out << std::max<std::int64_t>(0, result.observed.costs->charged_gain_bits().value_or(0));
+    }
+    if (result.at_least_observed) {
+        out << ',' << *result.at_least_observed << ',' << *result.at_least_observed + 1 << ',' << options.count + 1;
+    } else {
+        out << ",,,";
+    }
+    out << ',';
+    for (std::size_t i = 0; i < result.draws.size(); ++i) {
+        if (i) {
+            out << ' ';
+        }
+        const auto& draw = result.draws[i];
+        if (draw.charged_gain_bits) {
+            out << *draw.charged_gain_bits;
+        } else {
+            out << (draw.status == clab::MetricStatus::valid ? "absent" : status_name(draw.status));
+        }
+    }
+}
+
+void report_motif_temporal(clab::TraceReader& trace, std::ostream& out, clab::TemporalCategoricalSplit split,
+                           std::optional<PermutationOptions> options = std::nullopt) {
+    const auto evaluation = options
+        ? clab::score_categorical_motif_permutations(trace, split, options->count, options->seed)
+        : clab::TemporalMotifPermutationResult{clab::score_categorical_motif_temporal(trace, split), {}, {}};
+    const auto& result = evaluation.observed;
+    std::string columns = "baseline_id,model_bits,test_header_bits,placement_bits,residual_bits,test_bits,"
+                          "occurrences,baseline_model_bits,baseline_test_bits,conditional_gain_bits,charged_gain_bits";
+    if (options) {
+        columns += ",permutation_id,seed,draws_requested,draws_complete,draws_no_training_motif,"
+                   "draws_budget_exceeded,statistic_bits,extreme_draws,p_numerator,p_denominator,draw_gains_bits";
+    }
+    write_temporal_prefix(out, trace.metadata(), split, result, clab::categorical_frozen_motif_code_id, columns);
     out << ',' << clab::categorical_frozen_code_id;
     if (const auto& costs = result.costs) {
         const auto baseline_model = costs->baseline_model.length.total_bits();
@@ -399,15 +449,18 @@ void report_motif_temporal(clab::TraceReader& trace, std::ostream& out, clab::Te
             const auto model = motif->model.length.total_bits();
             const auto test = motif->test_bits();
             const auto gain = static_cast<std::int64_t>(costs->baseline_test_bits) - static_cast<std::int64_t>(test);
-            const auto charged = gain + static_cast<std::int64_t>(baseline_model) - static_cast<std::int64_t>(model);
             out << ',' << model << ',' << motif->test_header_bits << ',' << motif->placement_bits
                 << ',' << motif->residual_bits << ',' << test << ',' << motif->occurrences
-                << ',' << baseline_model << ',' << costs->baseline_test_bits << ',' << gain << ',' << charged;
+                << ',' << baseline_model << ',' << costs->baseline_test_bits << ',' << gain
+                << ',' << *costs->charged_gain_bits();
         } else {
             out << ",,,,,,," << baseline_model << ',' << costs->baseline_test_bits << ",,";
         }
     } else {
         out << ",,,,,,,,,,";
+    }
+    if (options) {
+        write_permutation_costs(out, evaluation, *options);
     }
     out << ',' << status_name(result.status) << ',' << result.reason << '\n';
     checked_flush(out);
@@ -427,20 +480,32 @@ int main(int argc, char** argv) {
             report_categorical_motifs(trace, out);
             return 0;
         }
-        if (mode == "--categorical-temporal" || mode == "--categorical-motif-temporal") {
-            if (argc != 7) {
+        if (mode == "--categorical-temporal" || mode == "--categorical-motif-temporal" ||
+            mode == "--categorical-motif-permutation") {
+            const bool permutation = mode == "--categorical-motif-permutation";
+            if (argc != (permutation ? 9 : 7)) {
                 return usage();
             }
-            const auto train = parse_size(argv[2]), guard = parse_size(argv[3]);
-            const auto test = parse_size(argv[4]), sites = parse_size(argv[5]);
+            const auto train = parse_unsigned(argv[2]), guard = parse_unsigned(argv[3]);
+            const auto test = parse_unsigned(argv[4]), sites = parse_unsigned(argv[5]);
             if (!train.value_or(0) || !guard.value_or(0) || !test.value_or(0) || !sites.value_or(0)) {
                 std::cerr << "clab-eval: categorical temporal sizes must be positive integers\n";
                 return 2;
             }
-            clab::TraceReader trace(argv[6]);
+            std::optional<PermutationOptions> options;
+            if (permutation) {
+                const auto draws = parse_unsigned(argv[6]);
+                const auto seed = parse_unsigned<std::uint64_t>(argv[7]);
+                if (!draws.value_or(0) || *draws > clab::temporal_motif_permutation_limit || !seed) {
+                    std::cerr << "clab-eval: invalid permutation draw count or seed\n";
+                    return 2;
+                }
+                options = PermutationOptions{*draws, *seed};
+            }
+            clab::TraceReader trace(argv[permutation ? 8 : 6]);
             const clab::TemporalCategoricalSplit split{*train, *guard, *test, *sites};
-            if (mode == "--categorical-motif-temporal") {
-                report_motif_temporal(trace, out, split);
+            if (mode != "--categorical-temporal") {
+                report_motif_temporal(trace, out, split, options);
             } else {
                 report_temporal(trace, out, split);
             }
@@ -450,7 +515,7 @@ int main(int argc, char** argv) {
             if (argc != 6) {
                 return usage();
             }
-            const auto train = parse_size(argv[2]), guard = parse_size(argv[3]), test = parse_size(argv[4]);
+            const auto train = parse_unsigned(argv[2]), guard = parse_unsigned(argv[3]), test = parse_unsigned(argv[4]);
             if (!train || !guard || !test || *train == 0 || *test == 0 ||
                 *guard > std::numeric_limits<std::size_t>::max() - *train ||
                 *test > std::numeric_limits<std::size_t>::max() - (*train + *guard)) {

@@ -1,0 +1,10 @@
+{
+  "protocol": "E01-categorical-motif-permutation-v1",
+  "scope": "one temporal motif window under independent within-frame categorical site permutation",
+  "surrogate": "within each selected training and test prefix, independently Fisher-Yates shuffle positions preserving frame shape and exact label counts; leave the split, guard, and frame boundaries fixed",
+  "pipeline": "rerun the temporal training gate and refit the motif and Huffman comparator for each draw; score the same held-out frames with models frozen within each draw",
+  "statistic": "positive part of model-charged motif gain, or zero on a completed split with no training motif; retain signed raw gains and missing draws",
+  "rank": "(1 + count of valid draws at least as extreme as observed) / (B + 1), ties included; choose seed and 1–199 draws before scoring; no rank after any failed draw and no retries",
+  "verification": "independent deterministic shuffle and score replay, known planted and absent cases, histogram invariance, budget failure handling, and installed conformance",
+  "limits": "engineering check for the product of within-frame permutations; inference requires joint invariance under that group, and no population, false-positive, or structural-score calibration is admitted"
+}

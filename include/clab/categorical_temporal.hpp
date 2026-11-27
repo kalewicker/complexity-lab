@@ -38,6 +38,7 @@ struct TemporalCategoricalMotifCosts {
     std::uint64_t baseline_test_bits{};
     // An empty motif on a completed split means the training gate did not admit a motif.
     std::optional<TemporalMotifCosts> motif;
+    [[nodiscard]] std::optional<std::int64_t> charged_gain_bits() const;
 };
 
 struct TemporalCategoricalMotifResult {
@@ -51,4 +52,23 @@ struct TemporalCategoricalMotifResult {
 [[nodiscard]] TemporalCategoricalMotifResult
 score_categorical_motif_temporal(IObservationSource& source, TemporalCategoricalSplit split,
                                  CodeLimits limits = {});
+
+inline constexpr std::size_t temporal_motif_permutation_limit = 199;
+inline constexpr std::string_view temporal_motif_permutation_id = "categorical.frame_permutation.v1";
+
+struct TemporalMotifPermutationDraw {
+    MetricStatus status{MetricStatus::valid};
+    std::optional<std::int64_t> charged_gain_bits;
+};
+
+struct TemporalMotifPermutationResult {
+    TemporalCategoricalMotifResult observed;
+    std::vector<TemporalMotifPermutationDraw> draws;
+    // Absent unless the observation and every requested draw completed.
+    std::optional<std::size_t> at_least_observed;
+};
+
+[[nodiscard]] TemporalMotifPermutationResult
+score_categorical_motif_permutations(IObservationSource& source, TemporalCategoricalSplit split,
+                                     std::size_t draws, std::uint64_t seed, CodeLimits limits = {});
 }

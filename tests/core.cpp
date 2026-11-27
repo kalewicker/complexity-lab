@@ -861,6 +861,28 @@ void temporal_categorical_fixtures(const std::filesystem::path& directory) {
             "temporal run without an admitted motif must report the frozen comparator");
 }
 
+void temporal_permutation_budget(const std::filesystem::path& directory) {
+    const auto path = directory / "permutation-budget.cltr";
+    std::array<clab::TypeId, 64> labels{};
+    for (std::size_t i = 0; i < labels.size(); ++i) {
+        labels[i] = static_cast<clab::TypeId>(i / 4);
+    }
+    clab::TraceWriter writer(path, {"permutation", "fixture", "step", true, true});
+    for (std::size_t i = 0; i < 3; ++i) {
+        writer.append({{i, double(i), i}, clab::Snapshot(labels)});
+    }
+    writer.finish();
+    clab::TraceReader trace(path);
+    // Shuffling can exceed the byte budget for run-length coding when runs are broken.
+    const auto result = clab::score_categorical_motif_permutations(trace, {1, 1, 1, 64}, 19, 2, {64, 260});
+    const auto failed = std::ranges::count_if(result.draws, [](const auto& draw) {
+        return draw.status == clab::MetricStatus::budget_exceeded && !draw.charged_gain_bits;
+    });
+    require(result.observed.costs && !result.at_least_observed && result.draws.size() == 19 &&
+            failed > 0 && failed < 19 && trace.status() == clab::TraceStatus::complete,
+            "a failed permutation must remain scheduled and suppress the rank");
+}
+
 #ifdef CLAB_TEST_SUBSTRATES
 void replay() {
     expect_error(clab::ErrorCode::limit, [] { clab::BinaryCa world(9, 0, 71); });
@@ -906,6 +928,7 @@ int main() {
         frozen_motif_fixtures();
         categorical_heldout_fixtures();
         temporal_categorical_fixtures(temp.path);
+        temporal_permutation_budget(temp.path);
 #ifdef CLAB_TEST_SUBSTRATES
         replay();
 #endif

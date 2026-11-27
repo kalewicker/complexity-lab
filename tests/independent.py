@@ -1533,6 +1533,96 @@ def check_categorical_motif_temporal(args, directory):
     }
 
 
+def check_categorical_motif_permutation(args, directory):
+    trace = directory / "categorical-motif-permutation.cltr"
+    train, guard, test, sites = split = (10, 1, 2, 6)
+    count, seed = 19, 0xFEE10A0C12345678
+    mode = "--categorical-motif-permutation"
+    training = [[1, 2, *range(start, start + 4)] for start in range(100, 140, 4)]
+    tests = [[1, 2, 200, 201, 202, 203], [1, 2, 204, 205, 206, 207]]
+    windows = [*training, [8] * sites, *tests, [9] * sites]
+    frames = [frame + [1000 + i] for i, frame in enumerate(windows)]
+    data = write_temporal_steps(trace, frames)
+    output = run(args.eval, mode, *split, count, seed, trace)
+    row, = csv.DictReader(io.StringIO(output))
+    observed, = csv.DictReader(io.StringIO(run(args.eval, "--categorical-motif-temporal", *split, trace)))
+    assert all(row[key] == value for key, value in observed.items())
+    assert row["permutation_id"] == "categorical.frame_permutation.v1" and int(row["seed"]) == seed
+    assert row["status"] == "valid" and int(row["statistic_bits"]) == int(observed["charged_gain_bits"]) > 0
+
+    # Reference generator with explicit 64-bit arithmetic and an independently constructed trace per draw.
+    mask = (1 << 64) - 1
+
+    def words():
+        state = seed
+        while True:
+            state = (state + 0x9E3779B97F4A7C15) & mask
+            mixed = ((state ^ (state >> 30)) * 0xBF58476D1CE4E5B9) & mask
+            mixed = ((mixed ^ (mixed >> 27)) * 0x94D049BB133111EB) & mask
+            yield mixed ^ (mixed >> 31)
+
+    random_words = words()
+
+    def permute(frame):
+        labels = frame[:sites]
+        for remaining in range(sites, 1, -1):
+            threshold = (1 << 64) % remaining
+            value = next(word for word in random_words if word >= threshold)
+            selected = value % remaining
+            labels[remaining - 1], labels[selected] = labels[selected], labels[remaining - 1]
+        assert Counter(labels) == Counter(frame[:sites])
+        return labels + frame[sites:]
+
+    scores = []
+    scored_frames = {*range(train), *range(train + guard, train + guard + test)}
+    for _ in range(count):
+        surrogate = [permute(frame) if i in scored_frames else frame for i, frame in enumerate(frames)]
+        write_temporal_steps(trace, surrogate)
+        replay, = csv.DictReader(io.StringIO(run(args.eval, "--categorical-motif-temporal", *split, trace)))
+        assert replay["status"] == "valid"
+        raw = replay["charged_gain_bits"]
+        scores.append(raw if raw else "absent")
+    assert row["draw_gains_bits"].split() == scores
+    assert 0 < scores.count("absent") < count
+    extreme = sum(int(score) >= int(row["statistic_bits"]) for score in scores if score != "absent")
+    assert tuple(int(row[key]) for key in (
+        "draws_requested", "draws_complete", "draws_no_training_motif", "draws_budget_exceeded",
+        "extreme_draws", "p_numerator", "p_denominator",
+    )) == (count, count, scores.count("absent"), 0, extreme, extreme + 1, count + 1)
+
+    changed = [frame[:sites] + [4000 + i] for i, frame in enumerate(frames)]
+    changed[train] = [21] * (sites + 1)
+    changed[-1] = [22] * (sites + 1)
+    write_temporal_steps(trace, changed)
+    assert run(args.eval, mode, *split, count, seed, trace) == output
+    tied_frames = [[7] * (sites + 1)] * len(frames)
+    write_temporal_steps(trace, tied_frames)
+    tied, = csv.DictReader(io.StringIO(run(args.eval, mode, train, guard, test, 1, count, 0, trace)))
+    assert tied["reason"] == "no_training_motif" and tied["seed"] == "0"
+    assert tied["draw_gains_bits"].split() == ["absent"] * count and tied["statistic_bits"] == "0"
+    assert int(tied["p_numerator"]) == int(tied["p_denominator"]) == count + 1
+    negative, = csv.DictReader(io.StringIO(run(args.eval, mode, *split, count, 0, trace)))
+    assert int(negative["charged_gain_bits"]) < 0 and negative["statistic_bits"] == "0"
+    assert negative["draw_gains_bits"].split() == [negative["charged_gain_bits"]] * count
+    assert negative["p_numerator"] == negative["p_denominator"] == str(count + 1)
+    write_temporal_steps(trace, frames[:3])
+    short, = csv.DictReader(io.StringIO(run(args.eval, mode, *split, count, seed, trace)))
+    assert short["status"] == "insufficient_data" and short["draws_complete"] == "0"
+    assert not any(short[key] for key in ("statistic_bits", "p_numerator", "p_denominator", "draw_gains_bits"))
+    for invalid_count, invalid_seed in ((0, seed), (200, seed), (19, -1), (19, 2**64)):
+        assert not run(args.eval, mode, *split, invalid_count, invalid_seed, trace, code=2)
+    trace.write_bytes(data[:-1])
+    assert not run(args.eval, mode, *split, count, seed, trace, code=1)
+    return {
+        "trace_sha256": hashlib.sha256(data).hexdigest(),
+        "csv_sha256": hashlib.sha256(output.encode()).hexdigest(),
+        "statistic_bits": int(row["statistic_bits"]),
+        "draw_gains_bits": scores,
+        "absent_draws": scores.count("absent"),
+        "rank": [extreme + 1, count + 1],
+    }
+
+
 def check_categorical_motif(args, directory):
     def gamma(value):
         binary = f"{value:b}"
@@ -1713,6 +1803,7 @@ def check(args, directory):
         "categorical_motif": check_categorical_motif(args, directory),
         "categorical_motif_heldout": check_categorical_motif_heldout(args, directory),
         "categorical_motif_temporal": check_categorical_motif_temporal(args, directory),
+        "categorical_motif_permutation": check_categorical_motif_permutation(args, directory),
     }
     assert result["categorical_sha256"] == "3dda44df0c60342ddd2b6456bbb350ea66a50141d86dc62ba4e887a0000fc9ba"
     assert result["events_sha256"] == "5f5e31d67be90e5eea677c262b01358df9cc2427ff86a17d975c44f4d34ddac1"

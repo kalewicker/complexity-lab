@@ -25,6 +25,7 @@ build/release/clab-eval --categorical-temporal 2 1 2 2 build/demo/trace.cltr
 build/release/clab-eval --categorical-motif build/demo/trace.cltr
 build/release/clab-eval --categorical-motif-heldout 4 1 4 build/demo/trace.cltr
 build/release/clab-eval --categorical-motif-temporal 2 1 2 4 build/demo/trace.cltr
+build/release/clab-eval --categorical-motif-permutation 2 1 2 4 19 42 build/demo/trace.cltr
 build/release/clab-eval --list-metrics
 build/release/clab-eval --plan-metrics --metric state.shannon_bits_per_symbol.v1
 build/release/clab-eval --metric state.shannon_bits_per_symbol.v1 build/demo/trace.cltr
@@ -77,3 +78,4 @@ For attributed relational traces, `clab-inspect --metadata` lists the schema and
 - [Exact categorical motif dictionary](docs/E01-categorical-motif.md)
 - [Frozen categorical motif transfer](docs/E01-categorical-motif-heldout.md)
 - [Temporal categorical motif transfer](docs/E01-categorical-motif-temporal.md)
+- [Temporal motif permutation test](docs/E01-categorical-motif-permutation.md)

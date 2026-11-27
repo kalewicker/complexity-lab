@@ -115,35 +115,145 @@ TemporalCategoricalResult score_categorical_temporal(IObservationSource& source,
         });
 }
 
-TemporalCategoricalMotifResult score_categorical_motif_temporal(IObservationSource& source,
-                                                                 TemporalCategoricalSplit split,
-                                                                 CodeLimits limits) {
-    std::optional<FrozenCategoricalModel> baseline;
-    std::optional<FrozenCategoricalMotif> motif;
+std::optional<std::int64_t> TemporalCategoricalMotifCosts::charged_gain_bits() const {
+    if (!motif) {
+        return std::nullopt;
+    }
+    const auto baseline = checked_add(baseline_test_bits, baseline_model.length.total_bits());
+    const auto model = checked_add(motif->test_bits(), motif->model.length.total_bits());
+    return static_cast<std::int64_t>(baseline) - static_cast<std::int64_t>(model);
+}
+
+namespace {
+class TemporalMotifScorer {
+public:
+    void fit(std::span<const TypeId> training, std::size_t sites,
+             CodeLimits limits, TemporalCategoricalMotifCosts& costs) {
+        baseline_.emplace(FrozenCategoricalModel::fit(training, limits));
+        costs.baseline_model = baseline_->model_code();
+        motif_ = FrozenCategoricalMotif::fit_frames(training, sites, limits);
+        if (motif_) {
+            costs.motif.emplace(TemporalMotifCosts{motif_->model_code()});
+        }
+    }
+
+    void score(std::span<const TypeId> test, CodeLimits limits, TemporalCategoricalMotifCosts& costs) const {
+        const auto encoded = baseline_->encode(test, limits);
+        costs.baseline_test_bits = checked_add(costs.baseline_test_bits, encoded.code.length.total_bits());
+        if (motif_) {
+            const auto frame = motif_->encode(test, limits);
+            auto& sums = *costs.motif;
+            sums.test_header_bits = checked_add(sums.test_header_bits, frame.code.length.header_bits);
+            sums.placement_bits = checked_add(sums.placement_bits, frame.placement_bits);
+            sums.residual_bits = checked_add(sums.residual_bits, frame.code.length.data_bits - frame.placement_bits);
+            sums.occurrences = checked_add(sums.occurrences, frame.placements.size());
+        }
+    }
+
+private:
+    std::optional<FrozenCategoricalModel> baseline_;
+    std::optional<FrozenCategoricalMotif> motif_;
+};
+
+struct MotifWindows {
+    std::vector<TypeId> training, test;
+};
+
+TemporalCategoricalMotifResult score_motif_window(IObservationSource& source, TemporalCategoricalSplit split,
+                                                   CodeLimits limits, MotifWindows* windows = nullptr) {
+    TemporalMotifScorer scorer;
     auto result = score_temporal<TemporalCategoricalMotifResult>(
         source, split, limits, std::min(limits.symbols, categorical_iid_symbol_limit),
         [&](std::span<const TypeId> training, TemporalCategoricalMotifCosts& costs) {
-            baseline.emplace(FrozenCategoricalModel::fit(training, limits));
-            costs.baseline_model = baseline->model_code();
-            motif = FrozenCategoricalMotif::fit_frames(training, split.sites, limits);
-            if (motif) {
-                costs.motif.emplace(TemporalMotifCosts{motif->model_code()});
+            scorer.fit(training, split.sites, limits, costs);
+            if (windows) {
+                windows->training.assign(training.begin(), training.end());
             }
         },
         [&](std::span<const TypeId> test, TemporalCategoricalMotifCosts& costs) {
-            const auto encoded = baseline->encode(test, limits);
-            costs.baseline_test_bits = checked_add(costs.baseline_test_bits, encoded.code.length.total_bits());
-            if (motif) {
-                const auto frame = motif->encode(test, limits);
-                auto& sums = *costs.motif;
-                sums.test_header_bits = checked_add(sums.test_header_bits, frame.code.length.header_bits);
-                sums.placement_bits = checked_add(sums.placement_bits, frame.placement_bits);
-                sums.residual_bits = checked_add(sums.residual_bits, frame.code.length.data_bits - frame.placement_bits);
-                sums.occurrences = checked_add(sums.occurrences, frame.placements.size());
+            scorer.score(test, limits, costs);
+            if (windows) {
+                windows->test.insert(windows->test.end(), test.begin(), test.end());
             }
         });
     if (result.costs && !result.costs->motif) {
         result.reason = "no_training_motif";
+    }
+    return result;
+}
+
+void permute_frames(std::span<TypeId> frames, std::size_t sites, std::uint64_t& seed) {
+    for (std::size_t offset = 0; offset < frames.size(); offset += sites) {
+        auto frame = frames.subspan(offset, sites);
+        for (std::uint64_t bound = sites; bound > 1; --bound) {
+            // Reject the partial interval before reducing SplitMix64 output modulo the bound.
+            const auto threshold = (std::uint64_t{0} - bound) % bound;
+            std::uint64_t value;
+            do {
+                seed += UINT64_C(0x9e3779b97f4a7c15);
+                value = seed;
+                value = (value ^ (value >> 30)) * UINT64_C(0xbf58476d1ce4e5b9);
+                value = (value ^ (value >> 27)) * UINT64_C(0x94d049bb133111eb);
+                value ^= value >> 31;
+            } while (value < threshold);
+            std::swap(frame[bound - 1], frame[value % bound]);
+        }
+    }
+}
+
+std::int64_t positive_gain(std::optional<std::int64_t> gain) {
+    return std::max<std::int64_t>(0, gain.value_or(0));
+}
+}
+
+TemporalCategoricalMotifResult score_categorical_motif_temporal(IObservationSource& source,
+                                                                 TemporalCategoricalSplit split,
+                                                                 CodeLimits limits) {
+    return score_motif_window(source, split, limits);
+}
+
+TemporalMotifPermutationResult score_categorical_motif_permutations(IObservationSource& source,
+                                                                     TemporalCategoricalSplit split,
+                                                                     std::size_t count, std::uint64_t seed,
+                                                                     CodeLimits limits) {
+    if (!count || count > temporal_motif_permutation_limit) {
+        throw Error(ErrorCode::invalid, "temporal motif permutation draw count is outside its bounds");
+    }
+    MotifWindows windows;
+    TemporalMotifPermutationResult result;
+    result.observed = score_motif_window(source, split, limits, &windows);
+    if (!result.observed.costs) {
+        return result;
+    }
+    const auto observed = positive_gain(result.observed.costs->charged_gain_bits());
+    result.draws.reserve(count);
+    std::size_t at_least = 0;
+    bool complete = true;
+    for (std::size_t draw = 0; draw < count; ++draw) {
+        auto permuted = windows;
+        permute_frames(permuted.training, split.sites, seed);
+        permute_frames(permuted.test, split.sites, seed);
+        TemporalMotifScorer scorer;
+        TemporalCategoricalMotifCosts costs;
+        try {
+            scorer.fit(permuted.training, split.sites, limits, costs);
+            const auto test = std::span(permuted.test);
+            for (std::size_t offset = 0; offset < test.size(); offset += split.sites) {
+                scorer.score(test.subspan(offset, split.sites), limits, costs);
+            }
+            const auto gain = costs.charged_gain_bits();
+            at_least += positive_gain(gain) >= observed;
+            result.draws.push_back({MetricStatus::valid, gain});
+        } catch (const Error& error) {
+            if (error.code() != ErrorCode::limit) {
+                throw;
+            }
+            result.draws.push_back({MetricStatus::budget_exceeded, std::nullopt});
+            complete = false;
+        }
+    }
+    if (complete) {
+        result.at_least_observed = at_least;
     }
     return result;
 }
