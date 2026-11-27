@@ -1,0 +1,12 @@
+{
+  "protocol": "E01-iid-enumerative-v1",
+  "scope": "exact histogram-conditioned enumerative coding of categorical snapshots with up to 4096 symbols",
+  "checks": {
+    "wire_compatibility": "preserve all four existing baseline layouts and the registered default diagnostics and baseline CSV",
+    "exactness": "verify model bits, ranks, rank width and exact bytes with independent permutation enumeration and integer factorial references",
+    "round_trip": "empty, singleton, skewed, balanced and relabeled samples including ranks wider than 64 bits round-trip exactly",
+    "rejection": "reject invalid labels, frequency totals, ranks, truncation and nonzero padding; report the IID region limit without losing later supported observations",
+    "install": "exercise the CLI and installed decoder through all three conformance hosts"
+  },
+  "limits": "conditional two-part IID reference with an externally supplied code ID. No cross-family selection, held-out fitting or scientific conclusion."
+}

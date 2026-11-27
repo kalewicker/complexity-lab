@@ -35,6 +35,15 @@ struct EncodedCategorical {
 
 [[nodiscard]] EncodedCategorical encode_categorical(std::span<const TypeId> symbols,
                                                      CategoricalCode code, CodeLimits limits = {});
+inline constexpr std::string_view categorical_iid_code_id = "categorical.iid_enumerative.v1";
+inline constexpr std::size_t categorical_iid_symbol_limit = 4096;
+
+[[nodiscard]] EncodedCategorical encode_categorical_iid(std::span<const TypeId> symbols,
+                                                        CodeLimits limits = {});
+[[nodiscard]] std::vector<TypeId> decode_categorical_iid(std::span<const std::uint8_t> bytes,
+                                                        std::uint64_t bit_count,
+                                                        CodeLimits limits = {});
+
 [[nodiscard]] std::vector<TypeId> decode_categorical(std::span<const std::uint8_t> bytes,
                                                      std::uint64_t bit_count, CodeLimits limits = {});
 }

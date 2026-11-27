@@ -3,6 +3,7 @@
 #include <clab/histogram_cache.hpp>
 #include <clab/trace.hpp>
 
+#include <algorithm>
 #include <array>
 #include <filesystem>
 
@@ -23,6 +24,10 @@ int main(int argc, char** argv) {
     const auto encoded = clab::encode_categorical(witness, clab::CategoricalCode::periodic);
     if (clab::decode_categorical(encoded.bytes, encoded.length.total_bits()) !=
         std::vector<clab::TypeId>(witness.begin(), witness.end())) {
+        return 1;
+    }
+    const auto iid = clab::encode_categorical_iid(witness);
+    if (!std::ranges::equal(clab::decode_categorical_iid(iid.bytes, iid.length.total_bits()), witness)) {
         return 1;
     }
     const std::filesystem::path path(argv[1]);

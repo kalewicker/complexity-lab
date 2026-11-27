@@ -36,7 +36,8 @@ int usage() {
     std::cerr << "usage: clab-eval [--metric ID]... [--cache-dir DIRECTORY] TRACE.cltr\n"
               << "       clab-eval --list-metrics\n"
               << "       clab-eval --plan-metrics [--metric ID]...\n"
-              << "       clab-eval --categorical-baselines TRACE.cltr\n";
+              << "       clab-eval --categorical-baselines TRACE.cltr\n"
+              << "       clab-eval --categorical-iid TRACE.cltr\n";
     return 2;
 }
 
@@ -47,11 +48,11 @@ void checked_flush(std::ostream& out) {
     }
 }
 
-void report_categorical_baselines(clab::TraceReader& trace, std::ostream& out) {
+void report_categorical_baselines(clab::TraceReader& trace, std::ostream& out, bool iid) {
     out.imbue(std::locale::classic());
     out << "run_id,sequence,work,encoding,exact,symbol_count,code_id,"
            "header_bits,model_bits,data_bits,total_bits,status\n";
-    const auto write_row = [&](clab::CategoricalCode code, const clab::ObservationRecord* record,
+    const auto write_row = [&](std::string_view code_id, const clab::ObservationRecord* record,
                                std::size_t count, std::optional<clab::CodeLength> length,
                                clab::MetricStatus status) {
         const auto& meta = trace.metadata();
@@ -68,7 +69,7 @@ void report_categorical_baselines(clab::TraceReader& trace, std::ostream& out) {
         if (record) {
             out << count;
         }
-        out << ',' << clab::categorical_code_id(code) << ',';
+        out << ',' << code_id << ',';
         if (length) {
             out << length->header_bits << ',' << length->model_bits << ',' << length->data_bits
                 << ',' << length->total_bits();
@@ -86,21 +87,35 @@ void report_categorical_baselines(clab::TraceReader& trace, std::ostream& out) {
         }
         saw_categorical = true;
         const auto symbols = snapshot->symbols();
-        for (const auto code : clab::categorical_codes) {
+        const auto report = [&](std::string_view id, const auto& encode) {
             try {
-                const auto encoded = clab::encode_categorical(symbols, code);
-                write_row(code, &*record, symbols.size(), encoded.length, clab::MetricStatus::valid);
+                const auto encoded = encode(symbols);
+                write_row(id, &*record, symbols.size(), encoded.length, clab::MetricStatus::valid);
             } catch (const clab::Error& error) {
                 if (error.code() != clab::ErrorCode::limit) {
                     throw;
                 }
-                write_row(code, &*record, symbols.size(), std::nullopt, clab::MetricStatus::budget_exceeded);
+                write_row(id, &*record, symbols.size(), std::nullopt, clab::MetricStatus::budget_exceeded);
+            }
+        };
+        if (iid) {
+            report(clab::categorical_iid_code_id,
+                   [](auto input) { return clab::encode_categorical_iid(input); });
+        } else {
+            for (const auto code : clab::categorical_codes) {
+                report(clab::categorical_code_id(code),
+                       [code](auto input) { return clab::encode_categorical(input, code); });
             }
         }
     }
     if (!saw_categorical) {
-        for (const auto code : clab::categorical_codes) {
-            write_row(code, nullptr, 0, std::nullopt, clab::MetricStatus::unsupported);
+        if (iid) {
+            write_row(clab::categorical_iid_code_id, nullptr, 0, std::nullopt, clab::MetricStatus::unsupported);
+        } else {
+            for (const auto code : clab::categorical_codes) {
+                write_row(clab::categorical_code_id(code), nullptr, 0, std::nullopt,
+                          clab::MetricStatus::unsupported);
+            }
         }
     }
     checked_flush(out);
@@ -110,12 +125,13 @@ void report_categorical_baselines(clab::TraceReader& trace, std::ostream& out) {
 int main(int argc, char** argv) {
     try {
         auto& out = std::cout;
-        if (argc > 1 && std::string_view(argv[1]) == "--categorical-baselines") {
+        const auto mode = argc > 1 ? std::string_view(argv[1]) : std::string_view{};
+        if (mode == "--categorical-baselines" || mode == "--categorical-iid") {
             if (argc != 3) {
                 return usage();
             }
             clab::TraceReader trace(argv[2]);
-            report_categorical_baselines(trace, out);
+            report_categorical_baselines(trace, out, mode == "--categorical-iid");
             return 0;
         }
         if (argc == 2 && std::string_view(argv[1]) == "--list-metrics") {

@@ -18,6 +18,7 @@ build/release/clab-inspect --index build/demo/trace.cltr
 build/release/clab-inspect --metadata build/demo/trace.cltr
 build/release/clab-eval build/demo/trace.cltr
 build/release/clab-eval --categorical-baselines build/demo/trace.cltr
+build/release/clab-eval --categorical-iid build/demo/trace.cltr
 build/release/clab-eval --list-metrics
 build/release/clab-eval --plan-metrics --metric state.shannon_bits_per_symbol.v1
 build/release/clab-eval --metric state.shannon_bits_per_symbol.v1 build/demo/trace.cltr
@@ -63,3 +64,4 @@ For attributed relational traces, `clab-inspect --metadata` lists the schema and
 - [Tier-0 dependency plan verification](docs/E01-dependencies-results.md)
 - [Persistent histogram cache verification](docs/E01-histogram-cache-results.md)
 - [Exact categorical baseline codes](docs/E01-categorical-codes.md)
+- [Exact categorical IID code](docs/E01-categorical-iid.md)

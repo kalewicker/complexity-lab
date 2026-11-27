@@ -489,6 +489,82 @@ void categorical_code_fixtures() {
     });
 }
 
+void iid_code_fixtures() {
+    const std::array<clab::TypeId, 3> witness{9, 3, 3};
+    const auto small = clab::encode_categorical_iid(witness);
+    require(small.length == clab::CodeLength{5, 71, 2} &&
+            small.bytes == hex_bytes("22000000034000000138"), "IID small golden");
+    const std::array<clab::TypeId, 3> relabeled{1, 0xffffffffU, 0xffffffffU};
+    const auto renamed = clab::encode_categorical_iid(relabeled);
+    require(renamed.length == small.length, "IID relabel-dependent length");
+    require(std::ranges::equal(clab::decode_categorical_iid(renamed.bytes, renamed.length.total_bits()),
+                               relabeled), "IID relabeled decode");
+
+    std::vector<clab::TypeId> wide(80, 3);
+    std::fill_n(wide.begin(), 40, 9);
+    const auto encoded = clab::encode_categorical_iid(wide);
+    require(encoded.length == clab::CodeLength{13, 89, 77} &&
+            encoded.bytes == hex_bytes("028a00000003050000000120a2d87f47612bb27010e660"),
+            "IID wide-rank golden");
+    require(clab::decode_categorical_iid(encoded.bytes, encoded.length.total_bits()) == wide,
+            "IID wide-rank decode");
+
+    const auto check = [](std::span<const clab::TypeId> sequence) {
+        const auto code = clab::encode_categorical_iid(sequence);
+        require(std::ranges::equal(clab::decode_categorical_iid(code.bytes, code.length.total_bits()),
+                                   sequence), "IID exact round trip");
+    };
+    check({});
+    check(std::array{clab::TypeId{0xffffffffU}});
+    check(std::vector<clab::TypeId>(clab::categorical_iid_symbol_limit, 7));
+    std::vector<clab::TypeId> multigroup(600, 2);
+    std::fill_n(multigroup.begin(), 200, 9);
+    std::fill_n(multigroup.begin() + 200, 200, 7);
+    check(multigroup);
+    std::array<clab::TypeId, 6> arrangement{2, 2, 2, 7, 7, 13};
+    std::size_t count = 0;
+    do {
+        const auto code = clab::encode_categorical_iid(arrangement);
+        require(code.length.data_bits == 6, "IID permutation width");
+        const auto bits = code.length.total_bits();
+        const auto padding = (8 - bits % 8) % 8;
+        // Read the six rank bits without using the decoder.
+        const auto tail = (std::uint16_t{code.bytes[code.bytes.size() - 2]} << 8) |
+                          code.bytes.back();
+        require(((tail >> padding) & 63) == count, "IID lexicographic rank");
+        require(std::ranges::equal(clab::decode_categorical_iid(code.bytes, bits), arrangement),
+                "IID exhaustive decode");
+        ++count;
+    } while (std::ranges::next_permutation(arrangement).found);
+    require(count == 60, "IID permutation count");
+
+    clab::Rng rng(391);
+    for (std::size_t n = 0; n < 128; ++n) {
+        std::vector<clab::TypeId> symbols(n);
+        for (auto& symbol : symbols) {
+            symbol = static_cast<clab::TypeId>(rng.next() % (n % 13 + 1));
+        }
+        check(symbols);
+    }
+
+    const std::array malformed{
+        std::tuple{78ULL, "2200000003400000013c", clab::ErrorCode::invalid}, // rank 3 of 3
+        std::tuple{41ULL, "240000000d00", clab::ErrorCode::invalid}, // frequency total short
+        std::tuple{76ULL, "22000000034000000070", clab::ErrorCode::invalid}, // duplicate label
+        std::tuple{77ULL, "22000000034000000138", clab::ErrorCode::incomplete}, // truncated rank
+        std::tuple{78ULL, "22000000034000000139", clab::ErrorCode::invalid}, // nonzero padding
+        std::tuple{25ULL, "00080100", clab::ErrorCode::limit}, // 4097 symbols
+    };
+    for (const auto& [length, hex, error] : malformed) {
+        expect_error(error, [&] { (void)clab::decode_categorical_iid(hex_bytes(hex), length); });
+    }
+    expect_error(clab::ErrorCode::limit, [] {
+        (void)clab::encode_categorical_iid(std::vector<clab::TypeId>(4097));
+    });
+    expect_error(clab::ErrorCode::limit, [&] { (void)clab::encode_categorical_iid(witness, {2, 64}); });
+    expect_error(clab::ErrorCode::limit, [&] { (void)clab::encode_categorical_iid(witness, {4, 1}); });
+}
+
 #ifdef CLAB_TEST_SUBSTRATES
 void replay() {
     expect_error(clab::ErrorCode::limit, [] { clab::BinaryCa world(9, 0, 71); });
@@ -528,6 +604,7 @@ int main() {
         dependency_resolution();
         selected_metrics(temp.path);
         categorical_code_fixtures();
+        iid_code_fixtures();
 #ifdef CLAB_TEST_SUBSTRATES
         replay();
 #endif

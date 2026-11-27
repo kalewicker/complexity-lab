@@ -1,11 +1,13 @@
 """Produce CLTR bytes without using any C++ implementation code."""
 import argparse
 import csv
+from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
 import hashlib
 import io
 from itertools import groupby
+from math import factorial, prod
 import json
 import os
 import signal
@@ -980,6 +982,9 @@ def check_categorical_codes(args, directory):
     trace = directory / "categorical-codes.cltr"
     trace.write_bytes(data)
     actual_csv = run(args.eval, "--categorical-baselines", trace)
+    assert hashlib.sha256(actual_csv.encode()).hexdigest() == (
+        "bfc268ab453e184ea40260d50d748ba318c0768c1c758cdc577f30c345ebfd05"
+    )
     rows = list(csv.DictReader(io.StringIO(actual_csv)))
 
     def reference(symbols):
@@ -1031,6 +1036,60 @@ def check_categorical_codes(args, directory):
         "csv_sha256": hashlib.sha256(actual_csv.encode()).hexdigest(),
         "independent_rows": len(rows),
         "witness_total_bits": [sum(parts) for parts in reference(sequences[2])],
+    }
+
+
+def check_categorical_iid(args, directory):
+    samples = [
+        [], [2**32 - 1], [9, 3, 3], [1, 2**32 - 1, 2**32 - 1],
+        [9] * 40 + [3] * 40, [1, 2, 3] * 15, [7] * 4097, [7] * 4095 + [8],
+    ]
+    trace = directory / "categorical-iid.cltr"
+    chunks = [
+        chunk(1, i, i, i, struct.pack(f"<{len(symbols)}I", *symbols))
+        for i, symbols in enumerate(samples)
+    ]
+    data = (header(META | {"fixed_sites": False}) + b"".join(chunks)
+            + chunk(0, len(chunks), len(chunks) - 1, len(chunks) - 1))
+    trace.write_bytes(data)
+    csv_text = run(args.eval, "--categorical-iid", trace)
+    rows = list(csv.DictReader(io.StringIO(csv_text)))
+    assert len(rows) == len(samples)
+
+    def gamma_bits(integer):
+        return 2 * integer.bit_length() - 1
+
+    widths = []
+    for i, (row, symbols) in enumerate(zip(rows, samples)):
+        assert row["sequence"] == row["work"] == str(i)
+        assert row["symbol_count"] == str(len(symbols))
+        assert row["code_id"] == "categorical.iid_enumerative.v1"
+        fields = ("header_bits", "model_bits", "data_bits", "total_bits")
+        if len(symbols) > 4096:
+            assert row["status"] == "budget_exceeded"
+            assert not any(row[field] for field in fields)
+            continue
+        assert row["status"] == "valid"
+        histogram = Counter(symbols)
+        model_bits = (gamma_bits(len(histogram)) +
+                      sum(32 + gamma_bits(n) for n in histogram.values())) if histogram else 0
+        permutations = factorial(len(symbols)) // prod(factorial(n) for n in histogram.values())
+        rank_bits = (permutations - 1).bit_length()
+        header_bits = gamma_bits(len(symbols) + 1)
+        expected = (header_bits, model_bits, rank_bits, header_bits + model_bits + rank_bits)
+        assert tuple(int(row[field]) for field in fields) == expected
+        widths.append(rank_bits)
+
+    trace.write_bytes(header() + chunk(2, 0, 0, 0, struct.pack("<3Q", 1, 0, 0)) + chunk(0, 1, 0, 0))
+    unsupported, = csv.DictReader(io.StringIO(run(args.eval, "--categorical-iid", trace)))
+    assert unsupported["status"] == "unsupported" and not unsupported["total_bits"]
+    trace.write_bytes(data[:-1])
+    run(args.eval, "--categorical-iid", trace, code=1)
+    return {
+        "trace_sha256": hashlib.sha256(data).hexdigest(),
+        "csv_sha256": hashlib.sha256(csv_text.encode()).hexdigest(),
+        "valid_rank_widths": widths,
+        "budget_exceeded_rows": 1,
     }
 
 
@@ -1117,6 +1176,7 @@ def check(args, directory):
         "dependency_plan": check_dependency_plan(args),
         "histogram_cache": check_histogram_cache(args, directory),
         "categorical_codes": check_categorical_codes(args, directory),
+        "categorical_iid": check_categorical_iid(args, directory),
     }
     assert result["categorical_sha256"] == "3dda44df0c60342ddd2b6456bbb350ea66a50141d86dc62ba4e887a0000fc9ba"
     assert result["events_sha256"] == "5f5e31d67be90e5eea677c262b01358df9cc2427ff86a17d975c44f4d34ddac1"
