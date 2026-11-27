@@ -1,0 +1,12 @@
+{
+  "protocol": "E01-categorical-motif-v1",
+  "scope": "one contiguous categorical motif of length 2–6 per snapshot, compared against all five exact baselines",
+  "checks": {
+    "accounting": "charge a three-bit family tag, length, motif definition, placement count and gaps, and raw residual symbols",
+    "selection": "enumerate every candidate in a bounded snapshot, use leftmost disjoint occurrences, and break equal candidate costs by first offset then shortest pattern; require strict gain against the complete baseline set",
+    "controls": "retain a negative periodic comparison and an absent dictionary; repeated separated motifs must recover exact placements and stream; relabeling preserves costs",
+    "codec": "decode exact selected candidate bytes; reject invalid layout, overlapping or out-of-range placements, truncation and budget violations",
+    "install": "run independent bitstring accounting, decoder checks and the full three-platform conformance matrix"
+  },
+  "limits": "bounded in-sample sequence dictionary reference only. No held-out dictionary validation, relational motifs, statistical calibration or structural complexity score."
+}

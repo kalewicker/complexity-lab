@@ -1364,6 +1364,96 @@ def check_categorical_temporal(args, directory):
     }
 
 
+def check_categorical_motif(args, directory):
+    def gamma(value):
+        binary = f"{value:b}"
+        return "0" * (len(binary) - 1) + binary
+
+    def reference(sequence):
+        n = len(sequence)
+        candidates = {sequence[i:i + width] for width in range(2, 7) for i in range(n - width + 1)}
+        best = None
+        for pattern in candidates:
+            width = len(pattern)
+            hits = [i for i in range(n - width + 1) if sequence[i:i + width] == pattern]
+            starts = []
+            for hit in hits:
+                if not starts or hit >= starts[-1] + width:
+                    starts.append(hit)
+            if len(starts) < 2:
+                continue
+            ends = [0] + [start + width for start in starts]
+            skipped = [sequence[end:start] for end, start in zip(ends, starts)] + [sequence[ends[-1]:]]
+            parts = (
+                "101" + gamma(n + 1),
+                gamma(width) + "".join(f"{symbol:032b}" for symbol in pattern),
+                gamma(len(starts)) + "".join(gamma(len(gap) + 1) for gap in skipped[:-1]),
+                "".join(f"{symbol:032b}" for gap in skipped for symbol in gap),
+            )
+            costs = tuple(map(len, parts))
+            order = (sum(costs), starts[0], width)
+            if best is None or order < best[0]:
+                best = (order, starts, costs)
+        return best
+
+    separated = tuple(symbol for i in range(100, 124) for symbol in (1, 2, 3, 4, 5, 6, i))
+    relabeled = tuple(0xFFFFFFFF - symbol for symbol in separated)
+    samples = [
+        separated, relabeled, (7, 6, 5, 4, 3) * 16, (1, 2, 3, 4), (),
+        (1, 2, 1, 2), (9, 9, 1, 9, 1, 9), (7,) * 4097, (7,) * 13,
+    ]
+    trace = directory / "categorical-motif.cltr"
+    chunks = [chunk(1, i, i, i, struct.pack(f"<{len(sample)}I", *sample)) for i, sample in enumerate(samples)]
+    data = (header(META | {"fixed_sites": False}) + b"".join(chunks)
+            + chunk(0, len(chunks), len(chunks) - 1, len(chunks) - 1))
+    trace.write_bytes(data)
+    output = run(args.eval, "--categorical-motif", trace)
+    rows = list(csv.DictReader(io.StringIO(output)))
+    assert len(rows) == len(samples)
+    baselines = {row["sequence"]: row for row in
+                 csv.DictReader(io.StringIO(run(args.eval, "--categorical-compare", trace)))
+                 if row["selected"] == "true"}
+    bit_fields = ("header_bits", "model_bits", "placement_bits", "residual_bits", "total_bits", "gain_bits")
+    motif_fields = ("motif_width", "occurrences", *bit_fields)
+    for i, (sample, row) in enumerate(zip(samples, rows)):
+        assert None not in row and None not in row.values()
+        assert row["sequence"] == row["work"] == str(i) and row["symbol_count"] == str(len(sample))
+        assert row["motif_id"] == "categorical.single_motif.v1" and row["exact"] == "true"
+        if len(sample) > 4096:
+            assert row["status"] == "budget_exceeded" and row["selected"] == "false"
+            assert not any(row[key] for key in ("baseline_id", "baseline_bits", *motif_fields))
+            continue
+        baseline = baselines[str(i)]
+        assert (row["baseline_id"], row["baseline_bits"]) == (baseline["code_id"], baseline["total_bits"])
+        expected = reference(sample)
+        if expected is None:
+            assert row["status"] == "no_motif" and row["selected"] == "false"
+            assert not any(row[key] for key in motif_fields)
+            continue
+        (total, _, width), starts, costs = expected
+        gain = int(row["baseline_bits"]) - total
+        assert row["status"] == "valid" and row["selected"] == str(gain > 0).lower()
+        assert tuple(int(row[key]) for key in motif_fields) == (width, len(starts), *costs, total, gain)
+
+    assert [row["selected"] for row in rows] == ["true", "true", *(["false"] * 7)]
+    assert tuple(int(rows[0][key]) for key in bit_fields[:-1]) == (18, 197, 79, 768, 1062)
+    assert all(rows[0][key] == rows[1][key] for key in ("baseline_id", "baseline_bits", *motif_fields))
+    assert rows[2]["baseline_id"] == "categorical.periodic.v1" and int(rows[2]["gain_bits"]) < 0
+    trace.write_bytes(header() + chunk(2, 0, 0, 0, struct.pack("<3Q", 1, 0, 0)) + chunk(0, 1, 0, 0))
+    unsupported, = csv.DictReader(io.StringIO(run(args.eval, "--categorical-motif", trace)))
+    assert unsupported["status"] == "unsupported" and unsupported["selected"] == "false"
+    assert not any(unsupported[key] for key in ("sequence", "symbol_count", "baseline_id", *motif_fields))
+    trace.write_bytes(data[:-1])
+    run(args.eval, "--categorical-motif", trace, code=1)
+    return {
+        "trace_sha256": hashlib.sha256(data).hexdigest(),
+        "csv_sha256": hashlib.sha256(output.encode()).hexdigest(),
+        "snapshot_rows": len(rows),
+        "separated_motif": {key: int(rows[0][key]) for key in ("baseline_bits", *motif_fields)},
+        "periodic_control": {key: int(rows[2][key]) for key in ("baseline_bits", "total_bits", "gain_bits")},
+    }
+
+
 def check(args, directory):
     assert crc32c(b"123456789") == 0xE3069283
     first = struct.pack("<4I", 0, 0, 1, 1)
@@ -1451,6 +1541,7 @@ def check(args, directory):
         "baseline_comparison": check_baseline_comparison(args, directory),
         "categorical_heldout": check_categorical_heldout(args, directory),
         "categorical_temporal": check_categorical_temporal(args, directory),
+        "categorical_motif": check_categorical_motif(args, directory),
     }
     assert result["categorical_sha256"] == "3dda44df0c60342ddd2b6456bbb350ea66a50141d86dc62ba4e887a0000fc9ba"
     assert result["events_sha256"] == "5f5e31d67be90e5eea677c262b01358df9cc2427ff86a17d975c44f4d34ddac1"

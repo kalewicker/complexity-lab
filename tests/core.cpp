@@ -1,5 +1,6 @@
 #include <clab/categorical_code.hpp>
 #include <clab/categorical_heldout.hpp>
+#include <clab/categorical_motif.hpp>
 #include <clab/categorical_temporal.hpp>
 #include <clab/evaluator.hpp>
 #include <clab/trace.hpp>
@@ -623,6 +624,65 @@ void categorical_comparison_fixtures() {
     });
 }
 
+void categorical_motif_fixtures() {
+    const std::vector<clab::TypeId> short_sequence{1, 2, 1, 2};
+    const auto short_result = clab::compare_categorical_motif(short_sequence);
+    const auto golden = hex_bytes("a540000000200000004b");
+    require(short_result.motif && !short_result.improves_baseline() &&
+            short_result.motif->encoded.bytes == golden &&
+            short_result.motif->encoded.length == clab::CodeLength{8, 67, 5},
+            "categorical motif golden frame");
+    require(clab::decode_categorical_motif(golden, 80) == short_sequence, "categorical motif golden decode");
+
+    const std::vector<clab::TypeId> pattern{1, 2, 3, 4, 5, 6};
+    std::vector<clab::TypeId> separated;
+    std::vector<std::size_t> placements;
+    for (clab::TypeId id = 100; id < 124; ++id) {
+        placements.push_back(separated.size());
+        separated.insert(separated.end(), pattern.begin(), pattern.end());
+        separated.push_back(id);
+    }
+    const auto result = clab::compare_categorical_motif(separated);
+    require(result.motif && result.improves_baseline() && result.motif->pattern == pattern &&
+            result.motif->placements == placements && result.motif->placement_bits == 79 &&
+            result.motif->encoded.length == clab::CodeLength{18, 197, 847},
+            "categorical motif costs and greedy placements");
+    require(clab::decode_categorical_motif(result.motif->encoded.bytes, 1062) == separated,
+            "categorical motif residual round trip");
+
+    const std::vector<clab::TypeId> tied{9, 9, 1, 9, 1, 9};
+    const auto tie = clab::compare_categorical_motif(tied);
+    require(tie.motif && tie.motif->pattern == std::vector<clab::TypeId>{9, 1},
+            "categorical motif first offset tie break");
+    const auto overlap = clab::compare_categorical_motif(std::vector<clab::TypeId>(13, 7));
+    require(overlap.motif && overlap.motif->placements == std::vector<std::size_t>{0, 2, 4, 6, 8, 10},
+            "categorical motif disjoint placements for overlapping matches");
+    require(!clab::compare_categorical_motif(std::array<clab::TypeId, 4>{1, 2, 3, 4}).motif,
+            "categorical motif absence");
+
+    for (const auto& [hex, size] : std::array<std::pair<std::string_view, std::uint64_t>, 6>{{
+             {"8540000000200000004b", 80},   // Wrong tag.
+             {"a580000000ac", 46},           // Width one.
+             {"a540000000200000004f80", 81}, // Too many placements.
+             {"a540000000200000004a80", 82}, // Second placement overruns region.
+             {"a540000000200000004b01", 81}, // Nonzero padding.
+             {"a540000000200000004b00", 81}, // Trailing bit.
+         }}) {
+        expect_error(clab::ErrorCode::invalid, [&] {
+            (void)clab::decode_categorical_motif(hex_bytes(hex), size);
+        });
+    }
+    expect_error(clab::ErrorCode::incomplete, [&] {
+        (void)clab::decode_categorical_motif(hex_bytes("a540000000200000004a"), 79);
+    });
+    expect_error(clab::ErrorCode::limit, [&] { (void)clab::decode_categorical_motif(golden, 80, {3, 10}); });
+    expect_error(clab::ErrorCode::limit, [&] { (void)clab::decode_categorical_motif(golden, 80, {4, 9}); });
+    expect_error(clab::ErrorCode::limit, [&] { (void)clab::compare_categorical_motif(short_sequence, {4, 4}); });
+    expect_error(clab::ErrorCode::limit, [&] {
+        (void)clab::compare_categorical_motif(std::vector<clab::TypeId>(4097, 7));
+    });
+}
+
 void categorical_heldout_fixtures() {
     const std::array<clab::TypeId, 4> train{9, 3, 9, 9};
     const auto fitted = clab::FrozenCategoricalModel::fit(train);
@@ -772,6 +832,7 @@ int main() {
         categorical_code_fixtures();
         iid_code_fixtures();
         categorical_comparison_fixtures();
+        categorical_motif_fixtures();
         categorical_heldout_fixtures();
         temporal_categorical_fixtures(temp.path);
 #ifdef CLAB_TEST_SUBSTRATES

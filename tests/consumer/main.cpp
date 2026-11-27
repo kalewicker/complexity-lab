@@ -1,5 +1,6 @@
 #include <clab/categorical_code.hpp>
 #include <clab/categorical_heldout.hpp>
+#include <clab/categorical_motif.hpp>
 #include <clab/categorical_temporal.hpp>
 #include <clab/evaluator.hpp>
 #include <clab/histogram_cache.hpp>
@@ -36,6 +37,12 @@ int main(int argc, char** argv) {
     if (!comparison.winner ||
         !std::ranges::equal(clab::decode_selected_categorical(
             comparison.winner->encoded.bytes, comparison.winner->encoded.length.total_bits()), witness)) {
+        return 1;
+    }
+    const std::array<clab::TypeId, 4> motif_witness{11, 19, 11, 19};
+    const auto motif = clab::compare_categorical_motif(motif_witness);
+    if (!motif.motif || !std::ranges::equal(clab::decode_categorical_motif(
+            motif.motif->encoded.bytes, motif.motif->encoded.length.total_bits()), motif_witness)) {
         return 1;
     }
     const auto fitted = clab::FrozenCategoricalModel::fit(witness);

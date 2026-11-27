@@ -1,5 +1,6 @@
 #include <clab/categorical_code.hpp>
 #include <clab/categorical_heldout.hpp>
+#include <clab/categorical_motif.hpp>
 #include <clab/categorical_temporal.hpp>
 #include <clab/evaluator.hpp>
 #include <clab/histogram_cache.hpp>
@@ -43,6 +44,7 @@ int usage() {
               << "       clab-eval --categorical-baselines TRACE.cltr\n"
               << "       clab-eval --categorical-iid TRACE.cltr\n"
               << "       clab-eval --categorical-compare TRACE.cltr\n"
+              << "       clab-eval --categorical-motif TRACE.cltr\n"
               << "       clab-eval --categorical-heldout TRAIN GUARD TEST TRACE.cltr\n"
               << "       clab-eval --categorical-temporal TRAIN GUARD TEST SITES TRACE.cltr\n";
     return 2;
@@ -151,6 +153,73 @@ void report_categorical_baselines(clab::TraceReader& trace, std::ostream& out, C
         if (mode != CategoricalReport::baselines) {
             write_row(clab::categorical_iid_code_id, nullptr, 0, std::nullopt, clab::MetricStatus::unsupported);
         }
+    }
+    checked_flush(out);
+}
+
+void report_categorical_motifs(clab::TraceReader& trace, std::ostream& out) {
+    out.imbue(std::locale::classic());
+    out << "run_id,sequence,work,encoding,exact,symbol_count,baseline_id,baseline_bits,motif_id,"
+           "motif_width,occurrences,header_bits,model_bits,placement_bits,residual_bits,total_bits,"
+           "gain_bits,selected,status\n";
+    const auto write_row = [&](const clab::ObservationRecord* record, std::size_t count,
+                               const clab::CategoricalMotifComparison* result, std::string_view status) {
+        const auto& meta = trace.metadata();
+        csv_text(out, meta.run_id);
+        out << ',';
+        if (record) {
+            out << record->stamp.sequence << ',' << record->stamp.work;
+        } else {
+            out << ',';
+        }
+        out << ',';
+        csv_text(out, meta.encoding);
+        out << ',' << (meta.exact ? "true" : "false") << ',';
+        if (record) {
+            out << count;
+        }
+        out << ',';
+        if (result) {
+            out << clab::categorical_family_id(result->baseline.family) << ','
+                << result->baseline.encoded.length.total_bits();
+        } else {
+            out << ',';
+        }
+        out << ',' << clab::categorical_motif_code_id << ',';
+        if (result && result->motif) {
+            const auto& motif = *result->motif;
+            const auto& length = motif.encoded.length;
+            const auto gain = static_cast<std::int64_t>(result->baseline.encoded.length.total_bits())
+                              - static_cast<std::int64_t>(length.total_bits());
+            out << motif.pattern.size() << ',' << motif.placements.size() << ',' << length.header_bits
+                << ',' << length.model_bits << ',' << motif.placement_bits << ','
+                << length.data_bits - motif.placement_bits << ',' << length.total_bits() << ',' << gain;
+        } else {
+            out << ",,,,,,,";
+        }
+        out << ',' << (result && result->improves_baseline() ? "true" : "false") << ',' << status << '\n';
+    };
+
+    bool saw_categorical = false;
+    while (const auto record = trace.next()) {
+        const auto* snapshot = std::get_if<clab::Snapshot>(&record->payload);
+        if (!snapshot) {
+            continue;
+        }
+        saw_categorical = true;
+        const auto symbols = snapshot->symbols();
+        try {
+            const auto result = clab::compare_categorical_motif(symbols);
+            write_row(&*record, symbols.size(), &result, result.motif ? "valid" : "no_motif");
+        } catch (const clab::Error& error) {
+            if (error.code() != clab::ErrorCode::limit) {
+                throw;
+            }
+            write_row(&*record, symbols.size(), nullptr, "budget_exceeded");
+        }
+    }
+    if (!saw_categorical) {
+        write_row(nullptr, 0, nullptr, "unsupported");
     }
     checked_flush(out);
 }
@@ -284,6 +353,14 @@ int main(int argc, char** argv) {
     try {
         auto& out = std::cout;
         const auto mode = argc > 1 ? std::string_view(argv[1]) : std::string_view{};
+        if (mode == "--categorical-motif") {
+            if (argc != 3) {
+                return usage();
+            }
+            clab::TraceReader trace(argv[2]);
+            report_categorical_motifs(trace, out);
+            return 0;
+        }
         if (mode == "--categorical-temporal") {
             if (argc != 7) {
                 return usage();
