@@ -4,6 +4,7 @@
 
 #include <functional>
 #include <string_view>
+#include <vector>
 
 namespace clab {
 enum class MetricStatus { valid, unsupported, insufficient_data, budget_exceeded };
@@ -22,14 +23,28 @@ struct EvalLimits {
     std::size_t recurrence_bytes = 4 * 1024 * 1024;
 };
 
+struct DependencySpec {
+    std::string_view id;
+    std::span<const std::string_view> prerequisites{};
+};
+
+// Check the entire graph, then return the requested closure in prerequisite-first order.
+// An empty request includes every node.
+[[nodiscard]] std::vector<std::string>
+resolve_dependencies(std::span<const DependencySpec> graph,
+                     std::span<const std::string_view> requested = {});
+
 struct MetricSpec {
     std::string_view id;
     std::string_view channel;
     std::string_view unit;
+    std::span<const std::string_view> prerequisites{};
 };
 
 [[nodiscard]] std::span<const MetricSpec> metric_catalog() noexcept;
 [[nodiscard]] const MetricSpec* find_metric(std::string_view id) noexcept;
+[[nodiscard]] std::vector<std::string>
+plan_metrics(std::span<const std::string_view> selected = {});
 
 using MetricSink = std::function<void(const MetricRow&)>;
 void evaluate(IObservationSource& source, const MetricSink& sink, EvalLimits limits = {});

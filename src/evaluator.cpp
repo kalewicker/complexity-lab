@@ -10,27 +10,46 @@
 
 namespace clab {
 namespace {
+constexpr std::string_view symbol_histogram_id = "artifact.symbol_histogram.v1";
+constexpr std::string_view history_id = "artifact.snapshot_history.v1";
+constexpr std::string_view entity_histogram_id = "artifact.entity_type_histogram.v1";
+constexpr std::string_view relation_histograms_id = "artifact.relation_histograms.v1";
+constexpr std::string_view entity_index_id = "artifact.entity_index.v1";
+constexpr std::string_view incidence_id = "artifact.relational_incidence.v1";
+constexpr std::string_view event_totals_id = "artifact.event_totals.v1";
+
+constexpr std::array symbol_histogram{symbol_histogram_id}, snapshot_history{history_id};
+constexpr std::array entity_histogram{entity_histogram_id}, relation_histograms{relation_histograms_id};
+constexpr std::array entity_index{entity_index_id}, incidence{incidence_id}, event_totals{event_totals_id};
+
+constexpr std::array artifacts{
+    DependencySpec{symbol_histogram_id}, DependencySpec{history_id},
+    DependencySpec{entity_histogram_id}, DependencySpec{relation_histograms_id},
+    DependencySpec{entity_index_id}, DependencySpec{incidence_id, entity_index},
+    DependencySpec{event_totals_id},
+};
+
 constexpr MetricSpec site_count{"state.symbol_count.v1", "categorical", "symbols"};
-constexpr MetricSpec entropy{"state.shannon_bits_per_symbol.v1", "categorical", "bits_per_symbol"};
-constexpr MetricSpec type_count{"state.type_count.v1", "categorical", "symbols"};
+constexpr MetricSpec entropy{"state.shannon_bits_per_symbol.v1", "categorical", "bits_per_symbol", symbol_histogram};
+constexpr MetricSpec type_count{"state.type_count.v1", "categorical", "symbols", symbol_histogram};
 constexpr MetricSpec compression_ratio{"state.rle_bytes_per_raw_byte.v1", "categorical", "bytes_per_byte"};
 constexpr MetricSpec longest_run{"state.longest_symbol_run.v1", "categorical", "symbols"};
-constexpr MetricSpec changed{"state.changed_sites.v1", "categorical", "sites"};
-constexpr MetricSpec recurrence{"state.recurrence_lag_snapshots.v1", "categorical", "snapshots"};
-constexpr MetricSpec lookback{"state.recurrence_lookback_snapshots.v1", "categorical", "snapshots"};
-constexpr MetricSpec event_count{"activity.events.v1", "events", "events"};
-constexpr MetricSpec births{"activity.births.v1", "events", "entities"};
-constexpr MetricSpec deaths{"activity.deaths.v1", "events", "entities"};
-constexpr MetricSpec observed_events{"activity.observed_events.v1", "events", "events"};
-constexpr MetricSpec reconstructed_events{"activity.reconstructed_events.v1", "events", "events"};
+constexpr MetricSpec changed{"state.changed_sites.v1", "categorical", "sites", snapshot_history};
+constexpr MetricSpec recurrence{"state.recurrence_lag_snapshots.v1", "categorical", "snapshots", snapshot_history};
+constexpr MetricSpec lookback{"state.recurrence_lookback_snapshots.v1", "categorical", "snapshots", snapshot_history};
+constexpr MetricSpec event_count{"activity.events.v1", "events", "events", event_totals};
+constexpr MetricSpec births{"activity.births.v1", "events", "entities", event_totals};
+constexpr MetricSpec deaths{"activity.deaths.v1", "events", "entities", event_totals};
+constexpr MetricSpec observed_events{"activity.observed_events.v1", "events", "events", event_totals};
+constexpr MetricSpec reconstructed_events{"activity.reconstructed_events.v1", "events", "events", event_totals};
 constexpr MetricSpec entities{"relational.entity_count.v1", "relational", "entities"};
 constexpr MetricSpec relations{"relational.relation_count.v1", "relational", "relations"};
 constexpr MetricSpec ports{"relational.port_count.v1", "relational", "ports"};
-constexpr MetricSpec entity_types{"relational.entity_type_count.v1", "relational", "entities"};
-constexpr MetricSpec relation_types{"relational.relation_type_count.v1", "relational", "relations"};
-constexpr MetricSpec arities{"relational.arity_count.v1", "relational", "relations"};
-constexpr MetricSpec components{"relational.component_count.v1", "relational", "components"};
-constexpr MetricSpec port_degrees{"relational.port_degree_count.v1", "relational", "entities"};
+constexpr MetricSpec entity_types{"relational.entity_type_count.v1", "relational", "entities", entity_histogram};
+constexpr MetricSpec relation_types{"relational.relation_type_count.v1", "relational", "relations", relation_histograms};
+constexpr MetricSpec arities{"relational.arity_count.v1", "relational", "relations", relation_histograms};
+constexpr MetricSpec components{"relational.component_count.v1", "relational", "components", incidence};
+constexpr MetricSpec port_degrees{"relational.port_degree_count.v1", "relational", "entities", incidence};
 constexpr MetricSpec logical_updates{"work.logical_updates.v1", "ledger", "updates"};
 constexpr MetricSpec reads{"work.reads.v1", "ledger", "reads"};
 constexpr MetricSpec writes{"work.writes.v1", "ledger", "writes"};
@@ -61,14 +80,18 @@ struct IncidenceDiagnostics {
     std::map<std::uint64_t, std::uint64_t> degree_counts;
 };
 
-IncidenceDiagnostics measure_incidence(const RelationalSnapshot& graph) {
+std::vector<EntityId> index_entities(const RelationalSnapshot& graph) {
     std::vector<EntityId> ids;
     ids.reserve(graph.entities().size());
     for (const auto& row : graph.entities()) {
         ids.push_back(row.id);
     }
     std::ranges::sort(ids);
+    return ids;
+}
 
+IncidenceDiagnostics measure_incidence(const RelationalSnapshot& graph,
+                                       std::span<const EntityId> ids) {
     struct Node {
         std::size_t parent;
         std::uint64_t degree{};
@@ -143,21 +166,41 @@ const MetricSpec* find_metric(std::string_view id) noexcept {
     return found == catalog.end() ? nullptr : &*found;
 }
 
+std::vector<std::string> plan_metrics(std::span<const std::string_view> selected) {
+    for (const auto id : selected) {
+        if (!find_metric(id)) {
+            throw Error(ErrorCode::invalid, "unknown metric ID: " + std::string(id));
+        }
+    }
+    const auto graph = [] {
+        std::vector<DependencySpec> nodes(artifacts.begin(), artifacts.end());
+        for (const auto& metric : catalog) {
+            nodes.push_back({metric.id, metric.prerequisites});
+        }
+        return nodes;
+    };
+    return resolve_dependencies(graph(), selected);
+}
+
 void evaluate(IObservationSource& source, const MetricSink& sink, EvalLimits limits) {
     evaluate(source, sink, limits, {});
 }
 
 void evaluate(IObservationSource& source, const MetricSink& sink, EvalLimits limits,
               std::span<const std::string_view> selected) {
-    for (const auto id : selected) {
-        if (!find_metric(id)) {
-            throw Error(ErrorCode::invalid, "unknown metric ID: " + std::string(id));
-        }
-    }
+    const auto plan = plan_metrics(selected);
+    const auto needs = [&](std::string_view id) {
+        return std::ranges::find(plan, id) != plan.end();
+    };
+    const bool needs_history = needs(history_id);
+    const bool needs_symbols = needs(symbol_histogram_id);
+    const bool needs_entity_histogram = needs(entity_histogram_id);
+    const bool needs_relation_histograms = needs(relation_histograms_id);
+    const bool needs_incidence = needs(incidence_id);
+    const bool needs_event_totals = needs(event_totals_id);
     const auto wants = [&](const MetricSpec& metric) {
         return selected.empty() || std::ranges::find(selected, metric.id) != selected.end();
     };
-    const bool needs_history = wants(changed) || wants(recurrence) || wants(lookback);
     std::deque<Snapshot> history;
     std::size_t history_bytes = 0;
     std::optional<std::size_t> fixed_site_count;
@@ -185,7 +228,7 @@ void evaluate(IObservationSource& source, const MetricSink& sink, EvalLimits lim
             if (wants(longest_run)) {
                 emit(stamp, longest_run, longest_symbol_run(symbols));
             }
-            if (wants(entropy) || wants(type_count)) {
+            if (needs_symbols) {
                 std::map<TypeId, std::uint64_t> histogram;
                 for (const auto symbol : symbols) {
                     ++histogram[symbol];
@@ -264,7 +307,7 @@ void evaluate(IObservationSource& source, const MetricSink& sink, EvalLimits lim
             emit(stamp, entities, std::uint64_t(graph->entities().size()));
             emit(stamp, relations, std::uint64_t(graph->relations().size()));
             emit(stamp, ports, std::uint64_t(graph->ports().size()));
-            if (wants(entity_types)) {
+            if (needs_entity_histogram) {
                 std::map<TypeId, std::uint64_t> histogram;
                 for (const auto& entity : graph->entities()) {
                     ++histogram[entity.type];
@@ -273,7 +316,7 @@ void evaluate(IObservationSource& source, const MetricSink& sink, EvalLimits lim
                     emit(stamp, entity_types, count, kind);
                 }
             }
-            if (wants(relation_types) || wants(arities)) {
+            if (needs_relation_histograms) {
                 std::map<TypeId, std::uint64_t> type_histogram, arity_histogram;
                 for (const auto& relation : graph->relations()) {
                     ++type_histogram[relation.type];
@@ -286,14 +329,15 @@ void evaluate(IObservationSource& source, const MetricSink& sink, EvalLimits lim
                     emit(stamp, arities, count, arity);
                 }
             }
-            if (wants(components) || wants(port_degrees)) {
-                const auto incidence = measure_incidence(*graph);
-                emit(stamp, components, incidence.component_count);
-                if (!incidence.degree_counts.empty() &&
-                    incidence.degree_counts.rbegin()->first > std::numeric_limits<TypeId>::max()) {
+            if (needs_incidence) {
+                const auto ids = index_entities(*graph);
+                const auto result = measure_incidence(*graph, ids);
+                emit(stamp, components, result.component_count);
+                if (!result.degree_counts.empty() &&
+                    result.degree_counts.rbegin()->first > std::numeric_limits<TypeId>::max()) {
                     missing(stamp, port_degrees, MetricStatus::budget_exceeded);
                 } else {
-                    for (const auto& [degree, count] : incidence.degree_counts) {
+                    for (const auto& [degree, count] : result.degree_counts) {
                         emit(stamp, port_degrees, count, static_cast<TypeId>(degree));
                     }
                 }
@@ -307,6 +351,9 @@ void evaluate(IObservationSource& source, const MetricSink& sink, EvalLimits lim
             missing(stamp, reconstructed_events, MetricStatus::unsupported);
         } else if (const auto* batch = std::get_if<EventBatch>(&record->payload)) {
             saw_events = true;
+            if (!needs_event_totals) {
+                continue;
+            }
             EventCounts totals;
             std::uint64_t observed = 0;
             for (const auto& event : batch->events()) {

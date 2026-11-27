@@ -797,6 +797,45 @@ def check_registry(args, directory):
     }
 
 
+def check_dependency_plan(args):
+    def plan(*ids):
+        flags = [arg for metric_id in ids for arg in ("--metric", metric_id)]
+        raw = run(args.eval, "--plan-metrics", *flags)
+        return [(row["kind"], row["id"]) for row in csv.DictReader(io.StringIO(raw))]
+
+    symbol_pair = ("state.type_count.v1", "state.shannon_bits_per_symbol.v1")
+    symbols = plan(*symbol_pair, symbol_pair[0])
+    assert symbols == [
+        ("artifact", "artifact.symbol_histogram.v1"),
+        ("metric", "state.shannon_bits_per_symbol.v1"),
+        ("metric", "state.type_count.v1"),
+    ]
+    assert plan(*reversed(symbol_pair)) == symbols
+    incidence = plan("relational.port_degree_count.v1", "relational.component_count.v1")
+    assert incidence == [
+        ("artifact", "artifact.entity_index.v1"),
+        ("artifact", "artifact.relational_incidence.v1"),
+        ("metric", "relational.component_count.v1"),
+        ("metric", "relational.port_degree_count.v1"),
+    ]
+    scalar = plan("work.reads.v1")
+    assert scalar == [("metric", "work.reads.v1")]
+    full = plan()
+    assert len(full) == len(set(full)) == 34
+    catalog = csv.DictReader(io.StringIO(run(args.eval, "--list-metrics")))
+    assert {id for kind, id in full if kind == "metric"} == {
+        row["metric_id"] for row in catalog
+    }
+    assert not run(args.eval, "--plan-metrics", "--metric", "artifact.entity_index.v1", code=2)
+    assert not run(args.eval, "--plan-metrics", "unexpected-path", code=2)
+    return {
+        "nodes": len(full),
+        "shared_histogram_plan": [id for _, id in symbols],
+        "incidence_plan": [id for _, id in incidence],
+        "ledger_scalar_plan": [id for _, id in scalar],
+    }
+
+
 def check(args, directory):
     assert crc32c(b"123456789") == 0xE3069283
     first = struct.pack("<4I", 0, 0, 1, 1)
@@ -877,6 +916,7 @@ def check(args, directory):
         "attributes": check_attributes(args, directory),
         "wire_compatibility": check_wire_compatibility(args, directory),
         "registry": check_registry(args, directory),
+        "dependency_plan": check_dependency_plan(args),
     }
     assert result["categorical_sha256"] == "3dda44df0c60342ddd2b6456bbb350ea66a50141d86dc62ba4e887a0000fc9ba"
     assert result["events_sha256"] == "5f5e31d67be90e5eea677c262b01358df9cc2427ff86a17d975c44f4d34ddac1"

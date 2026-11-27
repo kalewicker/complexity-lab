@@ -328,6 +328,41 @@ void mock_graph_replay(const std::filesystem::path& directory) {
             "mock graph live/trace diagnostic mismatch");
 }
 
+void dependency_resolution() {
+    using clab::DependencySpec;
+    constexpr std::array<std::string_view, 1> feature{"feature"}, input{"input"};
+    const std::array graph{
+        DependencySpec{"metric-b", feature}, DependencySpec{"unneeded"},
+        DependencySpec{"metric-a", feature}, DependencySpec{"feature", input},
+        DependencySpec{"input"},
+    };
+    constexpr std::array<std::string_view, 3> selected{"metric-a", "metric-b", "metric-a"};
+    const std::vector<std::string> shared{"input", "feature", "metric-b", "metric-a"};
+    require(clab::resolve_dependencies(graph, selected) == shared, "shared closure or order");
+    constexpr std::array<std::string_view, 1> select_a{"metric-a"};
+    require(clab::resolve_dependencies(graph, select_a) ==
+            std::vector<std::string>{"input", "feature", "metric-a"}, "single closure");
+    require(clab::resolve_dependencies(graph) ==
+            std::vector<std::string>{"unneeded", "input", "feature", "metric-b", "metric-a"},
+            "whole graph order");
+
+    const auto rejected = [](std::span<const DependencySpec> nodes,
+                             std::span<const std::string_view> roots = {}) {
+        expect_error(clab::ErrorCode::invalid, [&] {
+            (void)clab::resolve_dependencies(nodes, roots);
+        });
+    };
+    rejected(std::array{DependencySpec{"same"}, DependencySpec{"same"}});
+    rejected(std::array{DependencySpec{"output", input}});
+    constexpr std::array<std::string_view, 2> repeated{"input", "input"};
+    rejected(std::array{DependencySpec{"output", repeated}, DependencySpec{"input"}});
+    rejected(graph, std::array<std::string_view, 1>{"absent"});
+    rejected(std::array{DependencySpec{"input", input}});
+    constexpr std::array<std::string_view, 1> good{"good"};
+    rejected(std::array{DependencySpec{"good"}, DependencySpec{"input", feature},
+                        DependencySpec{"feature", input}}, good);
+}
+
 void selected_metrics(const std::filesystem::path& directory) {
     const auto path = directory / "metric-selection.cltr";
     const clab::Metadata meta{"selection", "binary-u32", "step", true, true};
@@ -396,6 +431,7 @@ int main() {
         provenance_round_trip(temp.path);
         attribute_round_trip(temp.path);
         mock_graph_replay(temp.path);
+        dependency_resolution();
         selected_metrics(temp.path);
 #ifdef CLAB_TEST_SUBSTRATES
         replay();

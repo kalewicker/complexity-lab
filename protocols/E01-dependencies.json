@@ -1,0 +1,12 @@
+{
+  "protocol": "E01-tier0-dependencies-v1",
+  "scope": "resolve metric and intermediate-data dependencies before tier-0 evaluation",
+  "checks": {
+    "ordering": "an acyclic shared dependency graph yields a deterministic prerequisite-first order, contains only the requested closure, and schedules a shared prerequisite once",
+    "invalid_graphs": "reject duplicate node IDs, repeated edges, missing dependencies, unknown roots, self-cycles and cycles in an unselected part of a graph",
+    "builtins": "an entropy and symbol-histogram request shares one histogram node; incidence diagnostics include the entity index first; selecting a ledger scalar alone schedules no intermediate data",
+    "compatibility": "preserve the registered default CSV digest, all 27 single-metric projections, full input validation and status values",
+    "install": "repeat the tests on Linux x86-64, Linux arm64 and macOS arm64 and exercise the plan API from the installed consumer"
+  },
+  "limits": "plans resolve dependencies and gate existing streaming calculations. Persistent caching, arbitrary metric callbacks, task parallelism and scientific estimator validation remain separate."
+}

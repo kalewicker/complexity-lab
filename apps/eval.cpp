@@ -31,7 +31,8 @@ const char* status_name(clab::MetricStatus status) {
 
 int usage() {
     std::cerr << "usage: clab-eval [--metric ID]... TRACE.cltr\n"
-              << "       clab-eval --list-metrics\n";
+              << "       clab-eval --list-metrics\n"
+              << "       clab-eval --plan-metrics [--metric ID]...\n";
     return 2;
 }
 
@@ -55,9 +56,10 @@ int main(int argc, char** argv) {
             return 0;
         }
         std::vector<std::string_view> selected;
-        int arg = 1;
+        const bool print_plan = argc > 1 && std::string_view(argv[1]) == "--plan-metrics";
+        int arg = print_plan ? 2 : 1;
         while (arg < argc && std::string_view(argv[arg]) == "--metric") {
-            if (arg + 2 >= argc) {
+            if (arg + (print_plan ? 1 : 2) >= argc) {
                 return usage();
             }
             const std::string_view id = argv[arg + 1];
@@ -67,6 +69,17 @@ int main(int argc, char** argv) {
             }
             selected.push_back(id);
             arg += 2;
+        }
+        if (print_plan) {
+            if (arg != argc) {
+                return usage();
+            }
+            out << "kind,id\n";
+            for (const auto& id : clab::plan_metrics(selected)) {
+                out << (clab::find_metric(id) ? "metric" : "artifact") << ',' << id << '\n';
+            }
+            checked_flush(out);
+            return 0;
         }
         if (arg != argc - 1) {
             return usage();

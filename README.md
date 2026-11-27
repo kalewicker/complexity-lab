@@ -18,6 +18,7 @@ build/release/clab-inspect --index build/demo/trace.cltr
 build/release/clab-inspect --metadata build/demo/trace.cltr
 build/release/clab-eval build/demo/trace.cltr
 build/release/clab-eval --list-metrics
+build/release/clab-eval --plan-metrics --metric state.shannon_bits_per_symbol.v1
 build/release/clab-eval --metric state.shannon_bits_per_symbol.v1 build/demo/trace.cltr
 ```
 
@@ -57,3 +58,4 @@ For attributed relational traces, `clab-inspect --metadata` lists the schema and
 - [Typed trace provenance verification](docs/E00-provenance-results.md)
 - [Relational attribute verification](docs/E00-attributes-results.md)
 - [Tier-0 metric registry verification](docs/E01-registry-results.md)
+- [Tier-0 dependency plan verification](docs/E01-dependencies-results.md)

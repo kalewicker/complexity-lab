@@ -12,6 +12,11 @@ int main(int argc, char** argv) {
     if (!entropy_spec || entropy_spec->unit != "bits_per_symbol" || clab::metric_catalog().size() != 27) {
         return 1;
     }
+    const std::array<std::string_view, 1> selected{entropy_spec->id};
+    if (clab::plan_metrics(selected) !=
+        std::vector<std::string>{"artifact.symbol_histogram.v1", std::string(entropy_spec->id)}) {
+        return 1;
+    }
     const std::filesystem::path path(argv[1]);
     const clab::TraceProvenance provenance{
         std::string(64, 'a'), std::nullopt, "external-consumer.v1", "cpu", "u32",
