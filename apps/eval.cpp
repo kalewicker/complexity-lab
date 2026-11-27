@@ -47,6 +47,7 @@ int usage() {
               << "       clab-eval --categorical-motif TRACE.cltr\n"
               << "       clab-eval --categorical-motif-heldout TRAIN GUARD TEST TRACE.cltr\n"
               << "       clab-eval --categorical-heldout TRAIN GUARD TEST TRACE.cltr\n"
+              << "       clab-eval --categorical-motif-temporal TRAIN GUARD TEST SITES TRACE.cltr\n"
               << "       clab-eval --categorical-temporal TRAIN GUARD TEST SITES TRACE.cltr\n";
     return 2;
 }
@@ -340,22 +341,21 @@ void report_heldout(clab::TraceReader& trace, std::ostream& out, HeldOutSplit sp
 }
 
 
-void report_temporal(clab::TraceReader& trace, std::ostream& out, clab::TemporalCategoricalSplit split) {
-    const auto result = clab::score_categorical_temporal(trace, split);
-    const auto& meta = trace.metadata();
+template <typename Result>
+void write_temporal_prefix(std::ostream& out, const clab::Metadata& meta, clab::TemporalCategoricalSplit split,
+                           const Result& result, std::string_view code_id, std::string_view cost_columns) {
     out.imbue(std::locale::classic());
     out << std::setprecision(std::numeric_limits<double>::max_digits10)
         << "run_id,encoding,time_unit,exact,code_id,train_snapshots,guard_snapshots,test_snapshots,sites,"
            "train_seen,guard_seen,test_seen,train_end_sequence,train_end_work,train_end_time,"
            "test_start_sequence,test_start_work,test_start_time,test_end_sequence,test_end_work,"
-           "test_end_time,model_bits,test_header_bits,test_data_bits,test_bits,raw_bits,"
-           "unseen_symbols,conditional_gain_bits,charged_gain_bits,status,reason\n";
+           "test_end_time," << cost_columns << ",status,reason\n";
     csv_text(out, meta.run_id);
     out << ',';
     csv_text(out, meta.encoding);
     out << ',';
     csv_text(out, meta.time_unit);
-    out << ',' << (meta.exact ? "true" : "false") << ',' << clab::categorical_frozen_code_id
+    out << ',' << (meta.exact ? "true" : "false") << ',' << code_id
         << ',' << split.train_snapshots << ',' << split.guard_snapshots << ',' << split.test_snapshots
         << ',' << split.sites << ',' << result.train_seen << ',' << result.guard_seen << ',' << result.test_seen;
     for (const auto& stamp : {result.train_end, result.test_start, result.test_end}) {
@@ -366,6 +366,13 @@ void report_temporal(clab::TraceReader& trace, std::ostream& out, clab::Temporal
             out << ",,";
         }
     }
+}
+
+void report_temporal(clab::TraceReader& trace, std::ostream& out, clab::TemporalCategoricalSplit split) {
+    const auto result = clab::score_categorical_temporal(trace, split);
+    write_temporal_prefix(out, trace.metadata(), split, result, clab::categorical_frozen_code_id,
+                          "model_bits,test_header_bits,test_data_bits,test_bits,raw_bits,"
+                          "unseen_symbols,conditional_gain_bits,charged_gain_bits");
     if (const auto& costs = result.costs) {
         const auto model = costs->model.length.total_bits();
         const auto test = clab::checked_add(costs->test_header_bits, costs->test_data_bits);
@@ -375,6 +382,32 @@ void report_temporal(clab::TraceReader& trace, std::ostream& out, clab::Temporal
             << ',' << gain << ',' << gain - static_cast<std::int64_t>(model);
     } else {
         out << ",,,,,,,,";
+    }
+    out << ',' << status_name(result.status) << ',' << result.reason << '\n';
+    checked_flush(out);
+}
+
+void report_motif_temporal(clab::TraceReader& trace, std::ostream& out, clab::TemporalCategoricalSplit split) {
+    const auto result = clab::score_categorical_motif_temporal(trace, split);
+    write_temporal_prefix(out, trace.metadata(), split, result, clab::categorical_frozen_motif_code_id,
+                          "baseline_id,model_bits,test_header_bits,placement_bits,residual_bits,test_bits,"
+                          "occurrences,baseline_model_bits,baseline_test_bits,conditional_gain_bits,charged_gain_bits");
+    out << ',' << clab::categorical_frozen_code_id;
+    if (const auto& costs = result.costs) {
+        const auto baseline_model = costs->baseline_model.length.total_bits();
+        if (const auto& motif = costs->motif) {
+            const auto model = motif->model.length.total_bits();
+            const auto test = motif->test_bits();
+            const auto gain = static_cast<std::int64_t>(costs->baseline_test_bits) - static_cast<std::int64_t>(test);
+            const auto charged = gain + static_cast<std::int64_t>(baseline_model) - static_cast<std::int64_t>(model);
+            out << ',' << model << ',' << motif->test_header_bits << ',' << motif->placement_bits
+                << ',' << motif->residual_bits << ',' << test << ',' << motif->occurrences
+                << ',' << baseline_model << ',' << costs->baseline_test_bits << ',' << gain << ',' << charged;
+        } else {
+            out << ",,,,,,," << baseline_model << ',' << costs->baseline_test_bits << ",,";
+        }
+    } else {
+        out << ",,,,,,,,,,";
     }
     out << ',' << status_name(result.status) << ',' << result.reason << '\n';
     checked_flush(out);
@@ -394,7 +427,7 @@ int main(int argc, char** argv) {
             report_categorical_motifs(trace, out);
             return 0;
         }
-        if (mode == "--categorical-temporal") {
+        if (mode == "--categorical-temporal" || mode == "--categorical-motif-temporal") {
             if (argc != 7) {
                 return usage();
             }
@@ -405,7 +438,12 @@ int main(int argc, char** argv) {
                 return 2;
             }
             clab::TraceReader trace(argv[6]);
-            report_temporal(trace, out, {*train, *guard, *test, *sites});
+            const clab::TemporalCategoricalSplit split{*train, *guard, *test, *sites};
+            if (mode == "--categorical-motif-temporal") {
+                report_motif_temporal(trace, out, split);
+            } else {
+                report_temporal(trace, out, split);
+            }
             return 0;
         }
         if (mode == "--categorical-heldout" || mode == "--categorical-motif-heldout") {

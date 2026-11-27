@@ -41,6 +41,9 @@ public:
     // An empty result means the training motif did not strictly beat the full baseline set.
     static std::optional<FrozenCategoricalMotif> fit(std::span<const TypeId> training,
                                                      CodeLimits limits = {});
+    // Fits on equal-width frames, with placements confined to each frame.
+    static std::optional<FrozenCategoricalMotif> fit_frames(std::span<const TypeId> training,
+                                                            std::size_t sites, CodeLimits limits = {});
     static FrozenCategoricalMotif from_bytes(std::span<const std::uint8_t> bytes, std::uint64_t bits,
                                               CodeLimits limits = {});
 

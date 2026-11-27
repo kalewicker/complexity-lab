@@ -728,6 +728,21 @@ void frozen_motif_fixtures() {
     expect_error(clab::ErrorCode::limit, [&] { (void)frozen.decode(golden, 76, {5, 10}); });
     expect_error(clab::ErrorCode::limit, [&] { (void)frozen.encode(test, {6, 9}); });
     expect_error(clab::ErrorCode::limit, [&] { (void)clab::FrozenCategoricalMotif::from_bytes(model, 67, {6, 8}); });
+
+    std::vector<clab::TypeId> training;
+    for (clab::TypeId i = 100; i < 116; i += 4) {
+        const std::array<clab::TypeId, 10> frame{4, 5, 6, i, i + 1, i + 2, i + 3, 1, 2, 3};
+        training.insert(training.end(), frame.begin(), frame.end());
+    }
+    const auto flat = clab::compare_categorical_motif(training);
+    const auto framed = clab::FrozenCategoricalMotif::fit_frames(training, 10);
+    const std::array<clab::TypeId, 6> crossing{1, 2, 3, 4, 5, 6};
+    require(flat.motif && std::ranges::equal(flat.motif->pattern, crossing),
+            "flattened fixture should nominate the cross-frame pattern");
+    require(framed && framed->model_code().length.total_bits() == 99 &&
+            framed->encode(crossing).placements == std::vector<std::size_t>{3},
+            "frame training must learn a pattern wholly within a snapshot");
+    expect_error(clab::ErrorCode::invalid, [&] { (void)clab::FrozenCategoricalMotif::fit_frames(training, 7); });
 }
 
 void categorical_heldout_fixtures() {
@@ -836,6 +851,14 @@ void temporal_categorical_fixtures(const std::filesystem::path& directory) {
     require(limit.status == clab::MetricStatus::budget_exceeded && !limit.costs &&
             limit.test_seen == 2 && bounded.status() == clab::TraceStatus::complete,
             "temporal budget must drain the trace");
+
+    clab::TraceReader no_motif(baseline);
+    const auto motif = clab::score_categorical_motif_temporal(no_motif, split);
+    require(motif.status == clab::MetricStatus::valid && motif.reason == "no_training_motif" &&
+            motif.costs && !motif.costs->motif &&
+            motif.costs->baseline_model.bytes == before.costs->model.bytes &&
+            motif.costs->baseline_test_bits == 44 && no_motif.status() == clab::TraceStatus::complete,
+            "temporal run without an admitted motif must report the frozen comparator");
 }
 
 #ifdef CLAB_TEST_SUBSTRATES

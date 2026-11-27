@@ -29,4 +29,4 @@ The [registered protocol](../protocols/E01-categorical-motif-heldout.json) train
 | CLTR fixture | `4ec9f04353228cd77b37b7f9e391fb975d2cd8f462f0a130c26ebdab6a162a44` |
 | CSV report | `ba6696823a3bd66d7e5f3ab11d8bc28cbd13907740a55951be1f5506248702f9` |
 
-These synthetic within-snapshot fixtures check transfer and exact accounting for a single learned pattern. Temporal transfer, null calibration, and structural scoring remain open.
+These synthetic within-snapshot fixtures check transfer and exact accounting for a single learned pattern. The [temporal evaluator](E01-categorical-motif-temporal.md) checks transfer across snapshots. Null calibration and structural scoring remain open.

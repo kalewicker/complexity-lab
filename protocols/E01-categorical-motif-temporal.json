@@ -1,0 +1,8 @@
+{
+  "protocol": "E01-categorical-motif-temporal-v1",
+  "scope": "one frozen contiguous categorical motif, transferred across disjoint windows of fixed-site snapshots",
+  "fit": "use equal leading site prefixes; enumerate patterns of width 2–6 and leftmost disjoint placements within each frame, with at least two matches across training; admit only a strict training gain, charging the dictionary once and comparing against the sum of independently selected five-family baselines for the training frames",
+  "test": "encode each later prefix as its own frame with the same frozen motif and the same Huffman comparator fitted on the training prefixes; charge each model definition once and retain zero-match tests and absent training dictionaries",
+  "controls": "hold test label counts fixed while changing order in one later frame; mutate the guard, unused sites and tail; exercise candidates spanning snapshot edges and controls with no admitted motif",
+  "limits": "4096 symbols in each aggregate scored window, exact serialized cost and synthetic temporal transfer checks only"
+}

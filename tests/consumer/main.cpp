@@ -96,6 +96,11 @@ int main(int argc, char** argv) {
     if (temporal.status != clab::MetricStatus::insufficient_data || temporal.train_seen != 1) {
         return 1;
     }
+    clab::TraceReader motif_temporal_trace(path);
+    const auto motif_temporal = clab::score_categorical_motif_temporal(motif_temporal_trace, {1, 1, 1, 2});
+    if (motif_temporal.status != clab::MetricStatus::insufficient_data || motif_temporal.train_seen != 1) {
+        return 1;
+    }
     const auto stats = cache.stats();
     return stats.stores + stats.hits == 1 && found_entropy && found_entity && trace.status() == clab::TraceStatus::complete ? 0 : 1;
 }

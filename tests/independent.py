@@ -1360,31 +1360,31 @@ def check_categorical_motif_heldout(args, directory):
     }
 
 
+def write_temporal_steps(trace, snapshots, times=None, fixed=True):
+    if times is None:
+        times = list(range(len(snapshots)))
+    chunks = []
+    for i, (frame, time) in enumerate(zip(snapshots, times)):
+        if i in (1, 3):
+            seq = len(chunks)
+            chunks.append(chunk(2, seq, time, seq, struct.pack("<3Q", 1, 0, 0)))
+        seq = len(chunks)
+        chunks.append(chunk(1, seq, time, seq, struct.pack(f"<{len(frame)}I", *frame)))
+    data = (header(META | {"fixed_sites": fixed}) + b"".join(chunks)
+            + chunk(0, len(chunks), times[-1], len(chunks) - 1))
+    trace.write_bytes(data)
+    return data
+
 def check_categorical_temporal(args, directory):
     trace = directory / "categorical-temporal.cltr"
     frames = [[9, 3, 0], [9, 9, 0], [700, 701, 0], [9, 3, 0], [100, 9, 0], [800, 801, 0]]
-
-    def write_steps(snapshots, times=None, fixed=True):
-        if times is None:
-            times = list(range(len(snapshots)))
-        chunks = []
-        for i, (frame, time) in enumerate(zip(snapshots, times)):
-            if i in (1, 3):
-                seq = len(chunks)
-                chunks.append(chunk(2, seq, time, seq, struct.pack("<3Q", 1, 0, 0)))
-            seq = len(chunks)
-            chunks.append(chunk(1, seq, time, seq, struct.pack(f"<{len(frame)}I", *frame)))
-        data = (header(META | {"fixed_sites": fixed}) + b"".join(chunks)
-                + chunk(0, len(chunks), times[-1], len(chunks) - 1))
-        trace.write_bytes(data)
-        return data
 
     def evaluate(*sizes):
         row, = csv.DictReader(io.StringIO(run(args.eval, "--categorical-temporal",
                                                *(sizes or (2, 1, 2, 2)), trace)))
         return row
 
-    data = write_steps(frames)
+    data = write_temporal_steps(trace, frames)
     output = run(args.eval, "--categorical-temporal", 2, 1, 2, 2, trace)
     row, = csv.DictReader(io.StringIO(output))
     assert row["status"] == "valid" and row["reason"] == ""
@@ -1403,10 +1403,10 @@ def check_categorical_temporal(args, directory):
     mutated = [frame[:2] + [900 + i] for i, frame in enumerate(frames)]
     mutated[2] = [100, 100, 902]
     mutated[-1] = [100, 100, 905]
-    write_steps(mutated)
+    write_temporal_steps(trace, mutated)
     assert evaluate() == row
     mutated[3] = [100, 100, 903]
-    write_steps(mutated)
+    write_temporal_steps(trace, mutated)
     shifted = evaluate()
     # First test now costs 2 escapes at 34 bits each. Last test stays at 35 data bits.
     assert tuple(int(shifted[name]) for name in fields) == (71, 6, 103, 109, 134, 3, 25, -46)
@@ -1417,20 +1417,20 @@ def check_categorical_temporal(args, directory):
         assert not any(actual[name] for name in fields)
         return actual
 
-    write_steps(frames[:4])
+    write_temporal_steps(trace, frames[:4])
     short = missing("insufficient_data", "too_few_snapshots")
     assert short["test_seen"] == "1"
-    write_steps(frames, [0, 1, 1, 3, 4, 5])
+    write_temporal_steps(trace, frames, [0, 1, 1, 3, 4, 5])
     missing("insufficient_data", "nonincreasing_time")
-    write_steps(frames)
+    write_temporal_steps(trace, frames)
     missing("insufficient_data", "too_few_sites", 2, 1, 2, 4)
-    write_steps(frames, fixed=False)
+    write_temporal_steps(trace, frames, fixed=False)
     missing("unsupported", "fixed_sites_required")
-    write_steps([[0] * 4097] * 3)
+    write_temporal_steps(trace, [[0] * 4097] * 3)
     missing("budget_exceeded", "code_limit", 1, 1, 1, 4097)
     trace.write_bytes(header() + chunk(2, 0, 0, 0, struct.pack("<3Q", 1, 0, 0)) + chunk(0, 1, 0, 0))
     missing("unsupported", "no_categorical_snapshots")
-    write_steps(frames[:-1] + [[0]])
+    write_temporal_steps(trace, frames[:-1] + [[0]])
     assert not run(args.eval, "--categorical-temporal", 2, 1, 2, 2, trace, code=1)
     trace.write_bytes(data[:-1])
     assert not run(args.eval, "--categorical-temporal", 2, 1, 2, 2, trace, code=1)
@@ -1441,6 +1441,95 @@ def check_categorical_temporal(args, directory):
         "baseline_bits": list(expected),
         "shifted_charged_gain": int(shifted["charged_gain_bits"]),
         "test_boundaries": [int(row["test_start_sequence"]), int(row["test_end_sequence"])],
+    }
+
+
+def check_categorical_motif_temporal(args, directory):
+    trace = directory / "categorical-motif-temporal.cltr"
+    mode = "--categorical-motif-temporal"
+    split = (2, 1, 2, 84)
+    pattern = [1, 2, 3, 4, 5, 6]
+    training = [[label for i in range(start, start + 12) for label in pattern + [i]]
+                for start in (100, 112)]
+    matched = pattern * 14
+    reversed_test = pattern[::-1] * 14
+    assert Counter(matched) == Counter(reversed_test)
+    frames = [*training, [7] * 84, matched, matched, [8] * 84]
+    frames = [frame + [1000 + i] for i, frame in enumerate(frames)]
+    data = write_temporal_steps(trace, frames)
+    output = run(args.eval, mode, *split, trace)
+    row, = csv.DictReader(io.StringIO(output))
+    motif_fields = ("model_bits", "test_header_bits", "placement_bits", "residual_bits", "test_bits", "occurrences")
+    baseline_fields = ("baseline_model_bits", "baseline_test_bits")
+    gain_fields = ("conditional_gain_bits", "charged_gain_bits")
+    fields = (*motif_fields, *baseline_fields, *gain_fields)
+    assert row["status"] == "valid" and row["reason"] == ""
+    assert row["code_id"] == "categorical.frozen_motif.v1" and row["exact"] == "true"
+    assert row["baseline_id"] == "categorical.frozen_huffman.v1"
+    assert tuple(int(row[key]) for key in ("train_seen", "guard_seen", "test_seen")) == split[:3]
+    assert [row[f"{anchor}_{field}"] for anchor in ("train_end", "test_start", "test_end")
+            for field in ("sequence", "work", "time")] == ["2", "2", "1", "5", "5", "3", "6", "6", "4"]
+
+    def costs(actual, tests, expected_motif):
+        assert None not in actual and None not in actual.values()
+        fit = training[0] + training[1]
+        references = [independent_frozen_huffman(fit, test) for test in tests]
+        baseline_model = references[0][0]
+        baseline_test = sum(ref[3] for ref in references)
+        conditional = baseline_test - expected_motif[4]
+        charged = conditional + baseline_model - expected_motif[0]
+        assert tuple(int(actual[key]) for key in fields) == (
+            *expected_motif, baseline_model, baseline_test, conditional, charged,
+        )
+
+    # Each 84-symbol frame pays gamma(85)=13 for length; 14 matches cost gamma(15)+14=21.
+    costs(row, [matched, matched], (197, 26, 42, 0, 68, 28))
+
+    def evaluate(sizes=split):
+        actual, = csv.DictReader(io.StringIO(run(args.eval, mode, *sizes, trace)))
+        return actual
+
+    mutated = [frame[:84] + [2000 + i] for i, frame in enumerate(frames)]
+    mutated[2] = [6] * 85
+    mutated[-1] = [5] * 85
+    write_temporal_steps(trace, mutated)
+    assert evaluate() == row
+    mutated[3] = reversed_test + [1003]
+    write_temporal_steps(trace, mutated)
+    shifted = evaluate()
+    # One frame now pays gamma(1) for no matches plus 84 literal u32s.
+    costs(shifted, [reversed_test, matched], (197, 26, 22, 2688, 2736, 14))
+    assert all(int(row[key]) > 0 > int(shifted[key]) for key in gain_fields)
+
+    write_temporal_steps(trace, [[9] * 85, [9] * 85, *frames[2:]])
+    absent = evaluate()
+    assert (absent["status"], absent["reason"]) == ("valid", "no_training_motif")
+    assert all(absent[key] for key in baseline_fields)
+    assert not any(absent[key] for key in (*motif_fields, *gain_fields))
+
+    def missing(status, reason, sizes=split):
+        actual = evaluate(sizes)
+        assert None not in actual and None not in actual.values()
+        assert (actual["status"], actual["reason"]) == (status, reason)
+        assert not any(actual[key] for key in fields)
+
+    write_temporal_steps(trace, frames[:4])
+    missing("insufficient_data", "too_few_snapshots")
+    write_temporal_steps(trace, frames, [0, 1, 1, 3, 4, 5])
+    missing("insufficient_data", "nonincreasing_time")
+    write_temporal_steps(trace, frames, fixed=False)
+    missing("unsupported", "fixed_sites_required")
+    write_temporal_steps(trace, [[0] * 2049] * 4)
+    missing("budget_exceeded", "code_limit", (1, 1, 2, 2049))
+    write_temporal_steps(trace, frames[:-1] + [[0]])
+    assert not run(args.eval, mode, *split, trace, code=1)
+    trace.write_bytes(data[:-1])
+    assert not run(args.eval, mode, *split, trace, code=1)
+    return {
+        "trace_sha256": hashlib.sha256(data).hexdigest(),
+        "csv_sha256": hashlib.sha256(output.encode()).hexdigest(),
+        "matched": {key: int(row[key]) for key in fields},
+        "reordered_first_test": {key: int(shifted[key]) for key in fields},
     }
 
 
@@ -1623,6 +1712,7 @@ def check(args, directory):
         "categorical_temporal": check_categorical_temporal(args, directory),
         "categorical_motif": check_categorical_motif(args, directory),
         "categorical_motif_heldout": check_categorical_motif_heldout(args, directory),
+        "categorical_motif_temporal": check_categorical_motif_temporal(args, directory),
     }
     assert result["categorical_sha256"] == "3dda44df0c60342ddd2b6456bbb350ea66a50141d86dc62ba4e887a0000fc9ba"
     assert result["events_sha256"] == "5f5e31d67be90e5eea677c262b01358df9cc2427ff86a17d975c44f4d34ddac1"

@@ -34,6 +34,23 @@ struct Occurrences {
     std::uint64_t gap_bits{};
 };
 
+std::map<std::vector<TypeId>, Occurrences> scan_motifs(std::span<const TypeId> symbols) {
+    std::map<std::vector<TypeId>, Occurrences> occurrences;
+    for (std::size_t start = 0; start + min_width <= symbols.size(); ++start) {
+        for (std::size_t width = min_width; width <= max_width && start + width <= symbols.size(); ++width) {
+            const auto match = symbols.subspan(start, width);
+            auto& slot = occurrences.try_emplace(std::vector<TypeId>(match.begin(), match.end()),
+                                                  Occurrences{start}).first->second;
+            if (start >= slot.next) {
+                ++slot.count;
+                slot.gap_bits += gamma_bits(start - slot.next + 1);
+                slot.next = start + width;
+            }
+        }
+    }
+    return occurrences;
+}
+
 std::vector<std::size_t> find_placements(std::span<const TypeId> symbols,
                                          std::span<const TypeId> pattern) {
     std::vector<std::size_t> starts;
@@ -136,19 +153,7 @@ CategoricalMotifComparison compare_categorical_motif(std::span<const TypeId> sym
     }
     CategoricalMotifComparison comparison{std::move(*baseline.winner), std::nullopt};
 
-    std::map<std::vector<TypeId>, Occurrences> occurrences;
-    for (std::size_t start = 0; start + min_width <= symbols.size(); ++start) {
-        for (std::size_t width = min_width; width <= max_width && start + width <= symbols.size(); ++width) {
-            const auto match = symbols.subspan(start, width);
-            auto& slot = occurrences.try_emplace(std::vector<TypeId>(match.begin(), match.end()),
-                                                  Occurrences{start}).first->second;
-            if (start >= slot.next) {
-                ++slot.count;
-                slot.gap_bits += gamma_bits(start - slot.next + 1);
-                slot.next = start + width;
-            }
-        }
-    }
+    const auto occurrences = scan_motifs(symbols);
 
     using Order = std::tuple<std::uint64_t, std::size_t, std::size_t>;
     std::optional<Order> best_cost;
@@ -210,6 +215,65 @@ std::optional<FrozenCategoricalMotif> FrozenCategoricalMotif::fit(std::span<cons
         return std::nullopt;
     }
     return FrozenCategoricalMotif(comparison.motif->pattern, limits);
+}
+
+std::optional<FrozenCategoricalMotif>
+FrozenCategoricalMotif::fit_frames(std::span<const TypeId> training, std::size_t sites, CodeLimits limits) {
+    if (!sites || training.empty() || training.size() % sites) {
+        throw Error(ErrorCode::invalid, "frozen motif training requires whole nonempty frames");
+    }
+    check_region(training.size(), limits);
+    struct TrainingMatches {
+        std::size_t first{}, count{};
+        std::uint64_t saved{};
+    };
+    std::map<std::vector<TypeId>, TrainingMatches> matches;
+    const auto empty_frame_bits = gamma_bits(sites + 1) + 1 + sites * symbol_bits;
+    std::uint64_t baseline_bits = 0;
+    for (std::size_t start = 0; start < training.size(); start += sites) {
+        const auto frame = training.subspan(start, sites);
+        const auto baseline = compare_categorical(frame, limits);
+        if (!baseline.winner) {
+            throw Error(ErrorCode::limit, "incomplete categorical training baseline set");
+        }
+        baseline_bits += baseline.winner->encoded.length.total_bits();
+        for (const auto& [candidate, hit] : scan_motifs(frame)) {
+            const auto width = candidate.size();
+            auto& total = matches.try_emplace(candidate, TrainingMatches{start + hit.first}).first->second;
+            total.count += hit.count;
+            // A zero-match frame already pays one bit for its placement count.
+            const auto added_placement_bits = gamma_bits(hit.count + 1) - 1 + hit.gap_bits;
+            total.saved += hit.count * width * symbol_bits - added_placement_bits;
+        }
+    }
+
+    const auto empty_bits = empty_frame_bits * (training.size() / sites);
+    auto best = std::tuple{baseline_bits, std::size_t{0}, std::size_t{0}};
+    const std::vector<TypeId>* pattern = nullptr;
+    for (const auto& [candidate, hit] : matches) {
+        if (hit.count < 2) {
+            continue;
+        }
+        const auto width = candidate.size();
+        const auto bits = empty_bits - hit.saved + gamma_bits(width) + width * symbol_bits;
+        const auto order = std::tuple{bits, hit.first, width};
+        if (order < best) {
+            best = order;
+            pattern = &candidate;
+        }
+    }
+    if (!pattern) {
+        return std::nullopt;
+    }
+    FrozenCategoricalMotif fitted(*pattern, limits);
+    auto encoded_bits = fitted.model_code().length.total_bits();
+    for (std::size_t start = 0; start < training.size(); start += sites) {
+        encoded_bits += fitted.encode(training.subspan(start, sites), limits).code.length.total_bits();
+    }
+    if (encoded_bits != std::get<0>(best)) {
+        throw std::logic_error("frozen motif training cost disagrees with encoded bytes");
+    }
+    return fitted;
 }
 
 FrozenCategoricalMotif FrozenCategoricalMotif::from_bytes(std::span<const std::uint8_t> bytes,
