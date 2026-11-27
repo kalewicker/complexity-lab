@@ -49,6 +49,7 @@ int usage() {
               << "       clab-eval --categorical-motif TRACE.cltr\n"
               << "       clab-eval --categorical-motif-dictionary TRACE.cltr\n"
               << "       clab-eval --categorical-motif-heldout TRAIN GUARD TEST TRACE.cltr\n"
+              << "       clab-eval --categorical-motif-dictionary-heldout TRAIN GUARD TEST TRACE.cltr\n"
               << "       clab-eval --categorical-heldout TRAIN GUARD TEST TRACE.cltr\n"
               << "       clab-eval --categorical-motif-temporal TRAIN GUARD TEST SITES TRACE.cltr\n"
               << "       clab-eval --categorical-motif-permutation TRAIN GUARD TEST SITES DRAWS SEED TRACE.cltr\n"
@@ -299,16 +300,55 @@ struct HeldOutSplit {
     std::size_t training, guard, test;
 };
 
-void report_heldout(clab::TraceReader& trace, std::ostream& out, HeldOutSplit split, bool motif) {
+enum class HeldOutModel { huffman, motif, dictionary };
+
+void write_dictionary_heldout(std::ostream& out, std::span<const clab::TypeId> training,
+                               std::span<const clab::TypeId> test, std::uint64_t baseline_model,
+                               std::uint64_t baseline_test) {
+    const auto dictionary = clab::FrozenCategoricalMotifDictionary::fit(training);
+    if (!dictionary) {
+        out << ",,,,,,,,," << baseline_model << ',' << baseline_test << ",,,,,no_training_dictionary\n";
+        return;
+    }
+    const auto pair_frame = dictionary->encode(test);
+    const auto first_frame = dictionary->first_entry().encode(test);
+    const auto& length = pair_frame.encoded.length;
+    const auto model_bits = dictionary->model_code().length.total_bits();
+    const auto first_model = dictionary->first_entry().model_code().length.total_bits();
+    const auto first_test = first_frame.code.length.total_bits();
+    const auto pair_test = length.total_bits();
+    const auto gain = [pair_test](std::uint64_t other_test) {
+        return static_cast<std::int64_t>(other_test) - static_cast<std::int64_t>(pair_test);
+    };
+    const auto charged = [model_bits, &gain](std::uint64_t other_model, std::uint64_t other_test) {
+        return gain(other_test) + static_cast<std::int64_t>(other_model) - static_cast<std::int64_t>(model_bits);
+    };
+    out << model_bits << ',' << length.header_bits << ',' << pair_frame.placement_bits << ','
+        << length.data_bits - pair_frame.placement_bits << ',' << pair_test << ','
+        << pair_frame.entries[0].placements.size() << ',' << pair_frame.entries[1].placements.size() << ','
+        << first_model << ',' << first_test << ',' << baseline_model << ',' << baseline_test << ','
+        << gain(first_test) << ',' << charged(first_model, first_test) << ','
+        << gain(baseline_test) << ',' << charged(baseline_model, baseline_test) << ",valid\n";
+}
+
+void report_heldout(clab::TraceReader& trace, std::ostream& out, HeldOutSplit split, HeldOutModel model) {
     out.imbue(std::locale::classic());
     out << "run_id,sequence,work,encoding,exact,symbol_count,train_symbols,guard_symbols,test_symbols,code_id,";
-    if (motif) {
+    if (model == HeldOutModel::dictionary) {
+        out << "baseline_id,model_bits,test_header_bits,placement_bits,residual_bits,test_bits,"
+               "first_occurrences,second_occurrences,first_model_bits,first_test_bits,baseline_model_bits,"
+               "baseline_test_bits,conditional_gain_vs_first_bits,charged_gain_vs_first_bits,"
+               "conditional_gain_vs_baseline_bits,charged_gain_vs_baseline_bits,status\n";
+    } else if (model == HeldOutModel::motif) {
         out << "baseline_id,model_bits,test_header_bits,placement_bits,residual_bits,test_bits,occurrences,"
                "baseline_model_bits,baseline_test_bits,conditional_gain_bits,charged_gain_bits,status\n";
     } else {
         out << "model_bits,test_header_bits,test_data_bits,test_bits,raw_bits,unseen_symbols,"
                "conditional_gain_bits,charged_gain_bits,status\n";
     }
+    const auto code_id = model == HeldOutModel::dictionary ? clab::categorical_frozen_dictionary_code_id
+                       : model == HeldOutModel::motif ? clab::categorical_frozen_motif_code_id
+                                                     : clab::categorical_frozen_code_id;
     const auto minimum = clab::checked_add(clab::checked_add(split.training, split.guard), split.test);
     bool saw_categorical = false;
     const auto write_prefix = [&](const clab::ObservationRecord* record, std::size_t count) {
@@ -327,13 +367,15 @@ void report_heldout(clab::TraceReader& trace, std::ostream& out, HeldOutSplit sp
             out << count;
         }
         out << ',' << split.training << ',' << split.guard << ',' << split.test << ','
-            << (motif ? clab::categorical_frozen_motif_code_id : clab::categorical_frozen_code_id) << ',';
-        if (motif) {
+            << code_id << ',';
+        if (model != HeldOutModel::huffman) {
             out << clab::categorical_frozen_code_id << ',';
         }
     };
     const auto write_missing = [&](std::string_view status) {
-        out << (motif ? ",,,,,,,,,," : ",,,,,,,,") << status << '\n';
+        const auto blanks = model == HeldOutModel::dictionary ? ",,,,,,,,,,,,,,,"
+                          : model == HeldOutModel::motif ? ",,,,,,,,,," : ",,,,,,,,";
+        out << blanks << status << '\n';
     };
     while (const auto record = trace.next()) {
         const auto* snapshot = std::get_if<clab::Snapshot>(&record->payload);
@@ -350,7 +392,7 @@ void report_heldout(clab::TraceReader& trace, std::ostream& out, HeldOutSplit sp
         try {
             const auto training = symbols.first(split.training);
             const auto test = symbols.subspan(split.training + split.guard, split.test);
-            if (motif && test.size() > clab::categorical_iid_symbol_limit) {
+            if (model != HeldOutModel::huffman && test.size() > clab::categorical_iid_symbol_limit) {
                 write_missing("budget_exceeded");
                 continue;
             }
@@ -358,7 +400,11 @@ void report_heldout(clab::TraceReader& trace, std::ostream& out, HeldOutSplit sp
             const auto encoded = fitted.encode(test);
             const auto model_bits = fitted.model_code().length.total_bits();
             const auto test_bits = encoded.code.length.total_bits();
-            if (motif) {
+            if (model == HeldOutModel::dictionary) {
+                write_dictionary_heldout(out, training, test, model_bits, test_bits);
+                continue;
+            }
+            if (model == HeldOutModel::motif) {
                 const auto dictionary = clab::FrozenCategoricalMotif::fit(training);
                 if (!dictionary) {
                     out << ",,,,,," << model_bits << ',' << test_bits << ",,,no_training_motif\n";
@@ -575,7 +621,8 @@ int main(int argc, char** argv) {
             }
             return 0;
         }
-        if (mode == "--categorical-heldout" || mode == "--categorical-motif-heldout") {
+        if (mode == "--categorical-heldout" || mode == "--categorical-motif-heldout" ||
+            mode == "--categorical-motif-dictionary-heldout") {
             if (argc != 6) {
                 return usage();
             }
@@ -587,7 +634,9 @@ int main(int argc, char** argv) {
                 return 2;
             }
             clab::TraceReader trace(argv[5]);
-            report_heldout(trace, out, {*train, *guard, *test}, mode == "--categorical-motif-heldout");
+            const auto model = mode == "--categorical-motif-dictionary-heldout" ? HeldOutModel::dictionary
+                             : mode == "--categorical-motif-heldout" ? HeldOutModel::motif : HeldOutModel::huffman;
+            report_heldout(trace, out, {*train, *guard, *test}, model);
             return 0;
         }
         if (mode == "--categorical-baselines" || mode == "--categorical-iid" ||

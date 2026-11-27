@@ -724,6 +724,42 @@ void categorical_dictionary_fixtures() {
     expect_error(clab::ErrorCode::limit, [&] {
         (void)clab::decode_categorical_motif_dictionary(golden, 294, {11, 100});
     });
+
+    const auto fitted = clab::FrozenCategoricalMotifDictionary::fit(input);
+    require(fitted && !clab::FrozenCategoricalMotifDictionary::fit(std::array<clab::TypeId, 4>{1, 2, 1, 2}),
+            "frozen dictionary admission");
+    const auto model = hex_bytes("4000000020000000480000000c00000010");
+    require(fitted->model_code().bytes == model && fitted->model_code().length == clab::CodeLength{0, 134, 0} &&
+            fitted->first_entry().model_code().length.total_bits() == 67, "frozen dictionary golden model");
+    const auto restored = clab::FrozenCategoricalMotifDictionary::from_bytes(model, 134);
+    const std::vector<clab::TypeId> test{9, 1, 2, 3, 4, 8};
+    const auto encoded = fitted->encode(test);
+    const auto test_golden = hex_bytes("3a48800000012000000100");
+    require(encoded.encoded.bytes == test_golden && encoded.encoded.length == clab::CodeLength{5, 0, 78} &&
+            encoded.placement_bits == 14 && encoded.entries[0].placements == std::vector<std::size_t>{1} &&
+            encoded.entries[1].placements == std::vector<std::size_t>{3} && restored.decode(test_golden, 83) == test,
+            "frozen dictionary exact test frame");
+    const auto empty = restored.encode({});
+    require(empty.encoded.bytes == hex_bytes("e0") && empty.encoded.length.total_bits() == 3 &&
+            restored.decode(empty.encoded.bytes, 3).empty(), "empty frozen dictionary frame");
+
+    const auto overlapping = clab::FrozenCategoricalMotifDictionary::from_bytes(
+        hex_bytes("400000002000000048000000080000000c"), 134);
+    const std::vector<clab::TypeId> contested{1, 2, 3, 2, 3};
+    const auto contested_code = overlapping.encode(contested);
+    require(contested_code.entries[0].placements == std::vector<std::size_t>{0} &&
+            contested_code.entries[1].placements == std::vector<std::size_t>{3} &&
+            overlapping.decode(contested_code.encoded.bytes, contested_code.encoded.length.total_bits()) == contested,
+            "first frozen entry keeps priority at overlapping test placements");
+
+    expect_error(clab::ErrorCode::invalid, [&] {
+        (void)clab::FrozenCategoricalMotifDictionary::from_bytes(
+            hex_bytes("4000000020000000480000000400000008"), 134);
+    });
+    expect_error(clab::ErrorCode::invalid, [&] { (void)restored.decode(hex_bytes("3a4980"), 17); });
+    expect_error(clab::ErrorCode::invalid, [&] { (void)restored.decode(hex_bytes("3a48c0"), 19); });
+    expect_error(clab::ErrorCode::incomplete, [&] { (void)restored.decode(test_golden, 82); });
+    expect_error(clab::ErrorCode::limit, [&] { (void)restored.decode(test_golden, 83, {5, 100}); });
 }
 
 void frozen_motif_fixtures() {

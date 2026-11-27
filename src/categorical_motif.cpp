@@ -105,6 +105,18 @@ void visit_uncovered(std::span<const TypeId> symbols, std::span<const std::size_
     visit(cursor, symbols.subspan(cursor));
 }
 
+std::vector<std::size_t> find_uncovered_placements(std::span<const TypeId> symbols,
+                                                    std::span<const std::size_t> first, std::size_t first_width,
+                                                    std::span<const TypeId> pattern) {
+    std::vector<std::size_t> starts;
+    visit_uncovered(symbols, first, first_width, [&](std::size_t offset, std::span<const TypeId> region) {
+        for (auto start : find_placements(region, pattern)) {
+            starts.push_back(offset + start);
+        }
+    });
+    return starts;
+}
+
 std::uint64_t write_gaps_and_residual(BitWriter& writer, std::span<const TypeId> symbols,
                                       std::span<const std::size_t> starts, std::size_t width) {
     write_gaps(writer, starts, width);
@@ -184,6 +196,23 @@ ordered_placements(const std::array<CategoricalMotifEntry, 2>& entries) {
     return placements;
 }
 
+std::uint64_t write_dictionary_data(BitWriter& writer, std::span<const TypeId> symbols,
+                                      const std::array<CategoricalMotifEntry, 2>& entries, bool allow_absent) {
+    const auto data_start = writer.position();
+    for (const auto& entry : entries) {
+        writer.gamma(entry.placements.size() + static_cast<std::size_t>(allow_absent));
+        write_gaps(writer, entry.placements, entry.pattern.size());
+    }
+    const auto placement_bits = writer.position() - data_start;
+    std::size_t cursor = 0;
+    for (auto [start, index] : ordered_placements(entries)) {
+        write_symbols(writer, symbols.subspan(cursor, start - cursor));
+        cursor = start + entries[index].pattern.size();
+    }
+    write_symbols(writer, symbols.subspan(cursor));
+    return placement_bits;
+}
+
 CategoricalMotifDictionary encode_dictionary(std::span<const TypeId> symbols,
                                              std::array<CategoricalMotifEntry, 2> entries, CodeLimits limits) {
     BitWriter writer(limits.encoded_bytes);
@@ -194,19 +223,8 @@ CategoricalMotifDictionary encode_dictionary(std::span<const TypeId> symbols,
         write_pattern(writer, entry.pattern);
     }
     length.model_bits = writer.position() - length.header_bits;
-    const auto data_start = writer.position();
-    for (const auto& entry : entries) {
-        writer.gamma(entry.placements.size());
-        write_gaps(writer, entry.placements, entry.pattern.size());
-    }
-    const auto placement_bits = writer.position() - data_start;
-    std::size_t cursor = 0;
-    for (auto [start, index] : ordered_placements(entries)) {
-        write_symbols(writer, symbols.subspan(cursor, start - cursor));
-        cursor = start + entries[index].pattern.size();
-    }
-    write_symbols(writer, symbols.subspan(cursor));
-    length.data_bits = writer.position() - data_start;
+    const auto placement_bits = write_dictionary_data(writer, symbols, entries, false);
+    length.data_bits = writer.position() - length.header_bits - length.model_bits;
     return {{writer.take_bytes(), length}, std::move(entries), placement_bits};
 }
 }
@@ -304,13 +322,10 @@ CategoricalMotifDictionaryComparison compare_categorical_motif_dictionary(std::s
         }
     }
     if (pattern) {
-        std::array<CategoricalMotifEntry, 2> entries{{{first.pattern, first.placements}, {*pattern, {}}}};
-        visit_uncovered(symbols, first.placements, first_width,
-                        [&](std::size_t offset, std::span<const TypeId> region) {
-            for (auto start : find_placements(region, *pattern)) {
-                entries[1].placements.push_back(offset + start);
-            }
-        });
+        std::array<CategoricalMotifEntry, 2> entries{{
+            {first.pattern, first.placements},
+            {*pattern, find_uncovered_placements(symbols, first.placements, first_width, *pattern)},
+        }};
         auto encoded = encode_dictionary(symbols, std::move(entries), limits);
         if (encoded.encoded.length.total_bits() != std::get<0>(*best)) {
             throw std::logic_error("categorical dictionary cost disagrees with encoded bytes");
@@ -320,14 +335,8 @@ CategoricalMotifDictionaryComparison compare_categorical_motif_dictionary(std::s
     return result;
 }
 
-std::vector<TypeId> decode_categorical_motif_dictionary(std::span<const std::uint8_t> bytes,
-                                                       std::uint64_t bit_count, CodeLimits limits) {
-    BitReader reader(bytes, bit_count, limits.encoded_bytes);
-    if (reader.get(categorical_family_bits) != dictionary_tag) {
-        throw Error(ErrorCode::invalid, "invalid categorical dictionary tag");
-    }
-    const auto count = reader.gamma() - 1;
-    check_region(count, limits);
+namespace {
+std::array<CategoricalMotifEntry, 2> read_dictionary_model(BitReader& reader, std::uint64_t count = max_width) {
     std::array<CategoricalMotifEntry, 2> entries;
     for (auto& entry : entries) {
         entry.pattern = read_pattern(reader, count);
@@ -335,9 +344,14 @@ std::vector<TypeId> decode_categorical_motif_dictionary(std::span<const std::uin
     if (entries[0].pattern == entries[1].pattern) {
         throw Error(ErrorCode::invalid, "duplicate categorical dictionary entry");
     }
+    return entries;
+}
+
+std::vector<TypeId> read_dictionary_data(BitReader& reader, std::uint64_t count,
+                                          std::array<CategoricalMotifEntry, 2> entries, bool allow_absent) {
     for (auto& entry : entries) {
-        const auto placements = reader.gamma();
-        if (placements < 2) {
+        const auto placements = reader.gamma() - static_cast<std::uint64_t>(allow_absent);
+        if (!allow_absent && placements < 2) {
             throw Error(ErrorCode::invalid, "invalid categorical motif placement count");
         }
         entry.placements = read_motif_starts(reader, entry.pattern.size(), count, placements);
@@ -371,6 +385,18 @@ std::vector<TypeId> decode_categorical_motif_dictionary(std::span<const std::uin
     }
     result.insert(result.end(), rest.begin(), rest.end());
     return result;
+}
+}
+
+std::vector<TypeId> decode_categorical_motif_dictionary(std::span<const std::uint8_t> bytes,
+                                                       std::uint64_t bit_count, CodeLimits limits) {
+    BitReader reader(bytes, bit_count, limits.encoded_bytes);
+    if (reader.get(categorical_family_bits) != dictionary_tag) {
+        throw Error(ErrorCode::invalid, "invalid categorical dictionary tag");
+    }
+    const auto count = reader.gamma() - 1;
+    check_region(count, limits);
+    return read_dictionary_data(reader, count, read_dictionary_model(reader, count), false);
 }
 
 FrozenCategoricalMotif::FrozenCategoricalMotif(std::span<const TypeId> pattern, CodeLimits limits)
@@ -478,5 +504,68 @@ std::vector<TypeId> FrozenCategoricalMotif::decode(std::span<const std::uint8_t>
     const auto count = reader.gamma() - 1;
     check_region(count, limits);
     return read_gaps_and_residual(reader, std::span(pattern_).first(width_), count, reader.gamma() - 1);
+}
+
+FrozenCategoricalMotifDictionary::FrozenCategoricalMotifDictionary(std::span<const TypeId> first,
+                                                                   std::span<const TypeId> second,
+                                                                   CodeLimits limits)
+    : first_(first, limits), second_width_(second.size()) {
+    std::ranges::copy(second, second_.begin());
+    BitWriter writer(limits.encoded_bytes);
+    write_pattern(writer, first);
+    write_pattern(writer, second);
+    const CodeLength length{0, writer.position(), 0};
+    model_ = {writer.take_bytes(), length};
+}
+
+std::optional<FrozenCategoricalMotifDictionary>
+FrozenCategoricalMotifDictionary::fit(std::span<const TypeId> training, CodeLimits limits) {
+    const auto comparison = compare_categorical_motif_dictionary(training, limits);
+    if (!comparison.selects_dictionary()) {
+        return std::nullopt;
+    }
+    const auto& entries = comparison.dictionary->entries;
+    return FrozenCategoricalMotifDictionary(entries[0].pattern, entries[1].pattern, limits);
+}
+
+FrozenCategoricalMotifDictionary FrozenCategoricalMotifDictionary::from_bytes(
+    std::span<const std::uint8_t> bytes, std::uint64_t bits, CodeLimits limits) {
+    BitReader reader(bytes, bits, limits.encoded_bytes);
+    const auto entries = read_dictionary_model(reader);
+    if (reader.remaining()) {
+        throw Error(ErrorCode::invalid, "trailing frozen motif dictionary model bits");
+    }
+    return FrozenCategoricalMotifDictionary(entries[0].pattern, entries[1].pattern, limits);
+}
+
+CategoricalMotifDictionary FrozenCategoricalMotifDictionary::encode(std::span<const TypeId> test,
+                                                                    CodeLimits limits) const {
+    check_region(test.size(), limits);
+    const auto first = std::span(first_.pattern_).first(first_.width_);
+    const auto second = std::span(second_).first(second_width_);
+    auto starts = find_placements(test, first);
+    auto second_starts = find_uncovered_placements(test, starts, first.size(), second);
+    std::array<CategoricalMotifEntry, 2> entries{{
+        {{first.begin(), first.end()}, std::move(starts)},
+        {{second.begin(), second.end()}, std::move(second_starts)},
+    }};
+    BitWriter writer(limits.encoded_bytes);
+    writer.gamma(test.size() + 1);
+    CodeLength length{writer.position()};
+    const auto placement_bits = write_dictionary_data(writer, test, entries, true);
+    length.data_bits = writer.position() - length.header_bits;
+    return {{writer.take_bytes(), length}, std::move(entries), placement_bits};
+}
+
+std::vector<TypeId> FrozenCategoricalMotifDictionary::decode(std::span<const std::uint8_t> bytes, std::uint64_t bits,
+                                                             CodeLimits limits) const {
+    BitReader reader(bytes, bits, limits.encoded_bytes);
+    const auto count = reader.gamma() - 1;
+    check_region(count, limits);
+    std::array<CategoricalMotifEntry, 2> entries{{
+        {{first_.pattern_.begin(), first_.pattern_.begin() + first_.width_}, {}},
+        {{second_.begin(), second_.begin() + second_width_}, {}},
+    }};
+    return read_dictionary_data(reader, count, std::move(entries), true);
 }
 }

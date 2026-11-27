@@ -1,0 +1,9 @@
+{
+  "protocol": "E01-categorical-motif-dictionary-heldout-v1",
+  "scope": "two frozen motifs transferred to a disjoint region of the same categorical snapshot",
+  "fit": "use the exact training dictionary gate against the one-entry candidate and all five baselines; freeze both admitted patterns in training order; fit Huffman on the same training prefix",
+  "test": "score the two-entry dictionary, its first entry alone, and frozen Huffman on the same held-out prefix after a guard; charge each model once; retain signed gains and zero occurrences",
+  "placements": "place the first frozen pattern leftmost and disjoint; place the second only within remaining contiguous intervals; each held-out count encodes one plus the number of occurrences",
+  "controls": "compare two trained arrangements with a test using only the first arrangement at identical label counts; preserve guard and tail isolation, relabeling, and exact decoder round trips",
+  "limits": "one within-snapshot split with at most 4096 training and 4096 test symbols; engineering fixtures only"
+}

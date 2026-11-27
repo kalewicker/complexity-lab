@@ -1333,6 +1333,92 @@ def check_categorical_motif_heldout(args, directory):
     }
 
 
+def check_categorical_dictionary_heldout(args, directory):
+    first = [1, 2, 3, 4, 5, 6]
+    second = [1, 3, 5, 2, 4, 6]
+    training = [x for i in range(24) for x in (first if i % 2 == 0 else second) + [100+i]]
+    guard = [800, 801, 802]
+    matched = (first + second) * 12
+    repeated_first = first * 24
+    repeated_second = second * 24
+    assert Counter(matched) == Counter(repeated_first) == Counter(repeated_second)
+    split = (len(training), len(guard), len(matched))
+    base = training + guard + matched
+    samples = [
+        base[:-1], base, training + [900, 901, 902] + matched + [999],
+        training + guard + repeated_first, training + guard + repeated_second,
+        [0xFFFFFFFF - label for label in base],
+        [7] * len(training) + guard + matched,
+    ]
+    trace = directory / "categorical-motif-dictionary-heldout.cltr"
+    data = write_temporal_steps(trace, samples, fixed=False)
+    mode = "--categorical-motif-dictionary-heldout"
+    output = run(args.eval, mode, *split, trace)
+    rows = list(csv.DictReader(io.StringIO(output)))
+    assert [row["status"] for row in rows] == [
+        "insufficient_data", "valid", "valid", "valid", "valid", "valid", "no_training_dictionary",
+    ]
+    fields = ("model_bits", "test_header_bits", "placement_bits", "residual_bits", "test_bits",
+              "first_occurrences", "second_occurrences", "first_model_bits", "first_test_bits",
+              "baseline_model_bits", "baseline_test_bits", "conditional_gain_vs_first_bits",
+              "charged_gain_vs_first_bits", "conditional_gain_vs_baseline_bits", "charged_gain_vs_baseline_bits")
+    for i, (sample, row) in enumerate(zip(samples, rows)):
+        assert None not in row and None not in row.values()
+        assert row["symbol_count"] == str(len(sample)) and row["exact"] == "true"
+        assert row["code_id"] == "categorical.frozen_two_motif.v1"
+        assert row["baseline_id"] == "categorical.frozen_huffman.v1"
+        if row["status"] == "insufficient_data":
+            assert not any(row[key] for key in fields)
+            continue
+        n, gap, count = split
+        fit = independent_frozen_huffman(sample[:n], sample[n+gap:n+gap+count])
+        assert (int(row["baseline_model_bits"]), int(row["baseline_test_bits"])) == (fit[0], fit[3])
+        if row["status"] == "no_training_dictionary":
+            assert not any(row[key] for key in fields[:9] + fields[11:])
+            continue
+
+        # Each six-label definition costs gamma(6) + 6 * 32. The test header is gamma(145).
+        # The matched layout has 12 occurrences of each, with 63 and 67 placement bits.
+        # A single repeated ordering takes gamma(25) + 24 zero gaps and one absent count bit.
+        parts = (130, 12, 12, 2382)
+        if i == 3:
+            parts = (34, 24, 0, 48)
+        elif i == 4:
+            parts = (34, 0, 24, 4624)
+        placements, first_count, second_count, first_cost = parts
+        pair_test = 15 + placements
+        first_gain, baseline_gain = first_cost - pair_test, fit[3] - pair_test
+        assert tuple(int(row[key]) for key in fields) == (
+            394, 15, placements, 0, pair_test, first_count, second_count, 197, first_cost,
+            fit[0], fit[3], first_gain, first_gain - 197, baseline_gain, baseline_gain + fit[0] - 394,
+        )
+    assert all(rows[1][key] == rows[2][key] == rows[5][key] for key in fields)
+    assert all(rows[1][key] == rows[3][key] == rows[4][key]
+               for key in ("baseline_model_bits", "baseline_test_bits"))
+    assert int(rows[1]["charged_gain_vs_first_bits"]) > 0 > int(rows[3]["charged_gain_vs_first_bits"])
+    independent_single = list(csv.DictReader(io.StringIO(
+        run(args.eval, "--categorical-motif-heldout", *split, trace))))
+    assert independent_single[1]["status"] == "no_training_motif"
+
+    write_temporal_steps(trace, [[7] * 4098], fixed=False)
+    for sizes in ((4097, 0, 1), (1, 0, 4097)):
+        capped, = csv.DictReader(io.StringIO(run(args.eval, mode, *sizes, trace)))
+        assert capped["status"] == "budget_exceeded" and not any(capped[key] for key in fields)
+    trace.write_bytes(header() + chunk(2, 0, 0, 0, struct.pack("<3Q", 1, 0, 0)) + chunk(0, 1, 0, 0))
+    unsupported, = csv.DictReader(io.StringIO(run(args.eval, mode, *split, trace)))
+    assert unsupported["status"] == "unsupported" and not any(unsupported[key] for key in fields)
+    assert not run(args.eval, mode, split[0], -1, split[2], trace, code=2)
+    trace.write_bytes(data[:-1])
+    run(args.eval, mode, *split, trace, code=1)
+    return {
+        "trace_sha256": hashlib.sha256(data).hexdigest(),
+        "csv_sha256": hashlib.sha256(output.encode()).hexdigest(),
+        "matched": {key: int(rows[1][key]) for key in fields},
+        "first_order_only": {key: int(rows[3][key]) for key in fields},
+        "second_order_only": {key: int(rows[4][key]) for key in fields},
+    }
+
+
 def write_temporal_steps(trace, snapshots, times=None, fixed=True):
     if times is None:
         times = list(range(len(snapshots)))
@@ -2133,6 +2219,7 @@ def check(args, directory):
         "categorical_motif": check_categorical_motif(args, directory),
         "categorical_motif_dictionary": check_categorical_motif_dictionary(args, directory),
         "categorical_motif_heldout": check_categorical_motif_heldout(args, directory),
+        "categorical_dictionary_heldout": check_categorical_dictionary_heldout(args, directory),
         "categorical_motif_temporal": check_categorical_motif_temporal(args, directory),
         "categorical_motif_permutation": check_categorical_motif_permutation(args, directory),
         "categorical_motif_site_permutation": check_categorical_motif_site_permutation(args, directory),

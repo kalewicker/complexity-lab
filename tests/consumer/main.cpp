@@ -53,6 +53,19 @@ int main(int argc, char** argv) {
             dictionary_witness)) {
         return 1;
     }
+    const auto frozen_dictionary = clab::FrozenCategoricalMotifDictionary::fit(dictionary_witness);
+    if (!frozen_dictionary) {
+        return 1;
+    }
+    const auto& dictionary_model = frozen_dictionary->model_code();
+    const auto restored_dictionary = clab::FrozenCategoricalMotifDictionary::from_bytes(
+        dictionary_model.bytes, dictionary_model.length.total_bits());
+    const auto dictionary_test = frozen_dictionary->encode(dictionary_witness);
+    if (!std::ranges::equal(restored_dictionary.decode(dictionary_test.encoded.bytes,
+                                                       dictionary_test.encoded.length.total_bits()),
+                           dictionary_witness)) {
+        return 1;
+    }
     const auto frozen_motif = clab::FrozenCategoricalMotif::from_bytes(
         std::array<std::uint8_t, 9>{0x40, 0, 0, 0, 0x20, 0, 0, 0, 0x40}, 67);
     const std::array<clab::TypeId, 4> frozen_witness{1, 2, 1, 2};
