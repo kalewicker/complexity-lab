@@ -30,6 +30,12 @@ int main(int argc, char** argv) {
     if (!std::ranges::equal(clab::decode_categorical_iid(iid.bytes, iid.length.total_bits()), witness)) {
         return 1;
     }
+    const auto comparison = clab::compare_categorical(witness);
+    if (!comparison.winner ||
+        !std::ranges::equal(clab::decode_selected_categorical(
+            comparison.winner->encoded.bytes, comparison.winner->encoded.length.total_bits()), witness)) {
+        return 1;
+    }
     const std::filesystem::path path(argv[1]);
     const clab::TraceProvenance provenance{
         std::string(64, 'a'), std::nullopt, "external-consumer.v1", "cpu", "u32",

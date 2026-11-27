@@ -565,6 +565,62 @@ void iid_code_fixtures() {
     expect_error(clab::ErrorCode::limit, [&] { (void)clab::encode_categorical_iid(witness, {4, 1}); });
 }
 
+void categorical_comparison_fixtures() {
+    using clab::CategoricalFamily;
+    std::array<std::vector<clab::TypeId>, 5> fixtures;
+    for (clab::TypeId i = 0; i < 12; ++i) {
+        fixtures[0].push_back(i);
+    }
+    for (const char symbol : std::string_view("01101000110110101100100111010010")) {
+        fixtures[1].push_back(static_cast<clab::TypeId>(symbol - '0'));
+    }
+    fixtures[2].assign(80, 1);
+    fixtures[2].insert(fixtures[2].end(), 60, 2);
+    fixtures[3] = {3, 9, 3, 9, 3};
+    fixtures[4].assign(128, 3);
+    for (const auto i : {2, 7, 15, 29, 32, 58, 70, 79, 83, 99, 104, 119}) {
+        fixtures[4][i] = 9;
+    }
+    constexpr std::array<std::uint64_t, 5> best_bits{394, 113, 106, 75, 160};
+    for (std::size_t i = 0; i < fixtures.size(); ++i) {
+        const auto result = clab::compare_categorical(fixtures[i]);
+        require(result.winner && result.winner->family == clab::categorical_families[i],
+                "categorical family selection");
+        const auto& frame = result.winner->encoded;
+        require(frame.length.total_bits() == best_bits[i] && frame.bytes[0] >> 5 == i,
+                "selected categorical frame cost or tag");
+        require(clab::decode_selected_categorical(frame.bytes, frame.length.total_bits()) == fixtures[i],
+                "selected categorical round trip");
+    }
+
+    const auto tie = clab::compare_categorical({});
+    require(tie.winner && tie.winner->family == CategoricalFamily::raw &&
+            tie.winner->encoded.bytes == hex_bytes("10"), "first family wins empty tie");
+    for (const auto& candidate : tie.candidates) {
+        require(candidate.length && candidate.length->total_bits() == 4, "empty tie cost");
+    }
+
+    const auto cap = clab::compare_categorical(std::array<clab::TypeId, 2>{1, 1}, {2, 5});
+    require(!cap.winner && cap.candidates[1].length && cap.candidates[1].length->total_bits() == 39 &&
+            !cap.candidates[2].length && !cap.candidates[4].length,
+            "shared selector must fit encoded byte budget");
+    const auto partial = clab::compare_categorical(std::vector<clab::TypeId>(4097, 1));
+    require(!partial.winner && partial.candidates[0].length && !partial.candidates[4].length,
+            "no selected frame for incomplete comparison");
+
+    for (const auto reserved : {"b0", "d0", "f0"}) {
+        expect_error(clab::ErrorCode::invalid, [&] {
+            (void)clab::decode_selected_categorical(hex_bytes(reserved), 4);
+        });
+    }
+    expect_error(clab::ErrorCode::invalid, [] {
+        (void)clab::decode_selected_categorical(hex_bytes("11"), 4);
+    });
+    expect_error(clab::ErrorCode::incomplete, [] {
+        (void)clab::decode_selected_categorical(hex_bytes("00"), 2);
+    });
+}
+
 #ifdef CLAB_TEST_SUBSTRATES
 void replay() {
     expect_error(clab::ErrorCode::limit, [] { clab::BinaryCa world(9, 0, 71); });
@@ -605,6 +661,7 @@ int main() {
         selected_metrics(temp.path);
         categorical_code_fixtures();
         iid_code_fixtures();
+        categorical_comparison_fixtures();
 #ifdef CLAB_TEST_SUBSTRATES
         replay();
 #endif

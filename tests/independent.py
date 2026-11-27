@@ -1053,6 +1053,9 @@ def check_categorical_iid(args, directory):
             + chunk(0, len(chunks), len(chunks) - 1, len(chunks) - 1))
     trace.write_bytes(data)
     csv_text = run(args.eval, "--categorical-iid", trace)
+    assert hashlib.sha256(csv_text.encode()).hexdigest() == (
+        "fc4255174f0e0030ac0c82f6da86bfe8ee51f61b3e96a2113668a90c122bb874"
+    )
     rows = list(csv.DictReader(io.StringIO(csv_text)))
     assert len(rows) == len(samples)
 
@@ -1090,6 +1093,90 @@ def check_categorical_iid(args, directory):
         "csv_sha256": hashlib.sha256(csv_text.encode()).hexdigest(),
         "valid_rank_widths": widths,
         "budget_exceeded_rows": 1,
+    }
+
+
+def check_baseline_comparison(args, directory):
+    sparse = {2, 7, 15, 29, 32, 58, 70, 79, 83, 99, 104, 119}
+    samples = [
+        [], list(range(12)), [int(bit) for bit in "01101000110110101100100111010010"],
+        [1] * 80 + [2] * 60, [3, 9, 3, 9, 3], [9 if i in sparse else 3 for i in range(128)],
+        [7] * 4097, [1, 2, 1],
+    ]
+    expected = [
+        [4, 4, 4, 4, 4], [394, 449, 406, 401, 442], [1038, 113, 725, 1015, 129],
+        [4498, 225, 106, 4513, 244], [168, 80, 173, 75, 85], [4114, 213, 905, 4063, 160],
+    ]
+    expected_winners = [0, 0, 1, 2, 3, 4]
+    code_ids = [f"categorical.{name}.v1" for name in
+                ("raw", "uniform", "run_length", "periodic", "iid_enumerative")]
+    chunks = [chunk(1, i, i, i, struct.pack(f"<{len(sample)}I", *sample))
+              for i, sample in enumerate(samples)]
+    data = (header(META | {"fixed_sites": False}) + b"".join(chunks)
+            + chunk(0, len(chunks), len(chunks) - 1, len(chunks) - 1))
+    trace = directory / "baseline-comparison.cltr"
+    trace.write_bytes(data)
+    report = run(args.eval, "--categorical-compare", trace)
+    rows = list(csv.DictReader(io.StringIO(report)))
+    assert len(rows) == 5 * len(samples)
+
+    # Construct all expected lengths independently from the specified bit layouts.
+    def gamma(n):
+        return 2 * n.bit_length() - 1
+
+    for i, sample in enumerate(samples):
+        n = len(sample)
+        costs = rows[i * 5:i * 5 + 5]
+        assert [row["code_id"] for row in costs] == code_ids
+        assert all(row["sequence"] == row["work"] == str(i) for row in costs)
+        assert all(row["symbol_count"] == str(n) and row["family_bits"] == "3" for row in costs)
+        selected = [tag for tag, row in enumerate(costs) if row["selected"] == "true"]
+        header_bits = 3 + gamma(n + 1)
+        model = [0] * 5
+        payload = [0] * 5
+        if n:
+            counts = Counter(sample)
+            k = len(counts)
+            period = next(step for step in range(1, n + 1)
+                          if all(label == sample[j % step] for j, label in enumerate(sample)))
+            model[1] = gamma(k) + 32 * k
+            model[3] = gamma(period) + 32 * period
+            model[4] = gamma(k) + sum(32 + gamma(count) for count in counts.values())
+            payload[0] = 32 * n
+            payload[1] = n * (k - 1).bit_length()
+            payload[2] = sum(32 + gamma(len(list(group))) for _, group in groupby(sample))
+            arrangements = factorial(n) // prod(factorial(count) for count in counts.values())
+            payload[4] = (arrangements - 1).bit_length()
+        fields = ("header_bits", "model_bits", "data_bits", "total_bits")
+        for tag, row in enumerate(costs):
+            if n > 4096 and tag == 4:
+                assert row["status"] == "budget_exceeded" and not any(row[field] for field in fields)
+                continue
+            parts = (header_bits, model[tag], payload[tag])
+            assert row["status"] == "valid"
+            assert tuple(int(row[field]) for field in fields) == (*parts, sum(parts))
+        if n > 4096:
+            assert selected == [] and {row["comparison_status"] for row in costs} == {"budget_exceeded"}
+        else:
+            totals = [int(row["total_bits"]) for row in costs]
+            winner = totals.index(min(totals))
+            assert selected == [winner] and {row["comparison_status"] for row in costs} == {"valid"}
+            if i < len(expected):
+                assert totals == expected[i] and winner == expected_winners[i]
+
+    trace.write_bytes(header() + chunk(2, 0, 0, 0, struct.pack("<3Q", 1, 0, 0)) + chunk(0, 1, 0, 0))
+    unsupported = list(csv.DictReader(io.StringIO(run(args.eval, "--categorical-compare", trace))))
+    assert [row["code_id"] for row in unsupported] == code_ids
+    assert all(row["comparison_status"] == row["status"] == "unsupported"
+               and not row["total_bits"] and row["selected"] == "false" for row in unsupported)
+    trace.write_bytes(data[:-1])
+    run(args.eval, "--categorical-compare", trace, code=1)
+    return {
+        "trace_sha256": hashlib.sha256(data).hexdigest(),
+        "csv_sha256": hashlib.sha256(report.encode()).hexdigest(),
+        "candidate_rows": len(rows),
+        "wins_by_fixture": expected_winners,
+        "over_budget_comparisons": 1,
     }
 
 
@@ -1177,6 +1264,7 @@ def check(args, directory):
         "histogram_cache": check_histogram_cache(args, directory),
         "categorical_codes": check_categorical_codes(args, directory),
         "categorical_iid": check_categorical_iid(args, directory),
+        "baseline_comparison": check_baseline_comparison(args, directory),
     }
     assert result["categorical_sha256"] == "3dda44df0c60342ddd2b6456bbb350ea66a50141d86dc62ba4e887a0000fc9ba"
     assert result["events_sha256"] == "5f5e31d67be90e5eea677c262b01358df9cc2427ff86a17d975c44f4d34ddac1"

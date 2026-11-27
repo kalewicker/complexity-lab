@@ -1,0 +1,12 @@
+{
+  "protocol": "E01-categorical-baseline-comparison-v1",
+  "scope": "minimum exact codelength within the fixed five-family categorical baseline set",
+  "checks": {
+    "accounting": "all five candidates pay one common three-bit family selector plus their length, model and data bits; previous code layouts and CSV modes remain byte-identical",
+    "selection": "verify independently constructed totals, a deterministic tie, and a fixture that selects each family",
+    "round_trip": "the selected frame decodes without a separate family ID; reject reserved tags, corrupt padding and truncated input",
+    "incomplete_set": "retain valid candidate lengths and mark an over-budget family, withhold selection when any family is unavailable, and continue to later snapshots",
+    "install": "test the CLI and installed API in the full conformance matrix"
+  },
+  "limits": "in-sample categorical engineering comparison. No held-out fitting, structural gain or scientific calibration."
+}

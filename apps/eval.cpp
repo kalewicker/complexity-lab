@@ -37,7 +37,8 @@ int usage() {
               << "       clab-eval --list-metrics\n"
               << "       clab-eval --plan-metrics [--metric ID]...\n"
               << "       clab-eval --categorical-baselines TRACE.cltr\n"
-              << "       clab-eval --categorical-iid TRACE.cltr\n";
+              << "       clab-eval --categorical-iid TRACE.cltr\n"
+              << "       clab-eval --categorical-compare TRACE.cltr\n";
     return 2;
 }
 
@@ -48,13 +49,22 @@ void checked_flush(std::ostream& out) {
     }
 }
 
-void report_categorical_baselines(clab::TraceReader& trace, std::ostream& out, bool iid) {
+enum class CategoricalReport { baselines, iid, comparison };
+
+void report_categorical_baselines(clab::TraceReader& trace, std::ostream& out, CategoricalReport mode) {
+    const bool compare = mode == CategoricalReport::comparison;
     out.imbue(std::locale::classic());
     out << "run_id,sequence,work,encoding,exact,symbol_count,code_id,"
-           "header_bits,model_bits,data_bits,total_bits,status\n";
+           "header_bits,model_bits,data_bits,total_bits,status";
+    if (compare) {
+        out << ",family_bits,comparison_status,selected";
+    }
+    out << '\n';
     const auto write_row = [&](std::string_view code_id, const clab::ObservationRecord* record,
                                std::size_t count, std::optional<clab::CodeLength> length,
-                               clab::MetricStatus status) {
+                               clab::MetricStatus status,
+                               clab::MetricStatus comparison_status = clab::MetricStatus::unsupported,
+                               bool selected = false) {
         const auto& meta = trace.metadata();
         csv_text(out, meta.run_id);
         out << ',';
@@ -76,7 +86,12 @@ void report_categorical_baselines(clab::TraceReader& trace, std::ostream& out, b
         } else {
             out << ",,,";
         }
-        out << ',' << status_name(status) << '\n';
+        out << ',' << status_name(status);
+        if (compare) {
+            out << ',' << clab::categorical_family_bits << ',' << status_name(comparison_status)
+                << ',' << (selected ? "true" : "false");
+        }
+        out << '\n';
     };
 
     bool saw_categorical = false;
@@ -87,6 +102,18 @@ void report_categorical_baselines(clab::TraceReader& trace, std::ostream& out, b
         }
         saw_categorical = true;
         const auto symbols = snapshot->symbols();
+        if (compare) {
+            const auto result = clab::compare_categorical(symbols);
+            const auto comparison_status = result.winner ? clab::MetricStatus::valid
+                                                         : clab::MetricStatus::budget_exceeded;
+            for (const auto& candidate : result.candidates) {
+                write_row(clab::categorical_family_id(candidate.family), &*record, symbols.size(),
+                          candidate.length,
+                          candidate.length ? clab::MetricStatus::valid : clab::MetricStatus::budget_exceeded,
+                          comparison_status, result.winner && result.winner->family == candidate.family);
+            }
+            continue;
+        }
         const auto report = [&](std::string_view id, const auto& encode) {
             try {
                 const auto encoded = encode(symbols);
@@ -98,7 +125,7 @@ void report_categorical_baselines(clab::TraceReader& trace, std::ostream& out, b
                 write_row(id, &*record, symbols.size(), std::nullopt, clab::MetricStatus::budget_exceeded);
             }
         };
-        if (iid) {
+        if (mode == CategoricalReport::iid) {
             report(clab::categorical_iid_code_id,
                    [](auto input) { return clab::encode_categorical_iid(input); });
         } else {
@@ -109,13 +136,14 @@ void report_categorical_baselines(clab::TraceReader& trace, std::ostream& out, b
         }
     }
     if (!saw_categorical) {
-        if (iid) {
-            write_row(clab::categorical_iid_code_id, nullptr, 0, std::nullopt, clab::MetricStatus::unsupported);
-        } else {
+        if (mode != CategoricalReport::iid) {
             for (const auto code : clab::categorical_codes) {
                 write_row(clab::categorical_code_id(code), nullptr, 0, std::nullopt,
                           clab::MetricStatus::unsupported);
             }
+        }
+        if (mode != CategoricalReport::baselines) {
+            write_row(clab::categorical_iid_code_id, nullptr, 0, std::nullopt, clab::MetricStatus::unsupported);
         }
     }
     checked_flush(out);
@@ -126,12 +154,19 @@ int main(int argc, char** argv) {
     try {
         auto& out = std::cout;
         const auto mode = argc > 1 ? std::string_view(argv[1]) : std::string_view{};
-        if (mode == "--categorical-baselines" || mode == "--categorical-iid") {
+        if (mode == "--categorical-baselines" || mode == "--categorical-iid" ||
+            mode == "--categorical-compare") {
             if (argc != 3) {
                 return usage();
             }
             clab::TraceReader trace(argv[2]);
-            report_categorical_baselines(trace, out, mode == "--categorical-iid");
+            auto report = CategoricalReport::baselines;
+            if (mode == "--categorical-iid") {
+                report = CategoricalReport::iid;
+            } else if (mode == "--categorical-compare") {
+                report = CategoricalReport::comparison;
+            }
+            report_categorical_baselines(trace, out, report);
             return 0;
         }
         if (argc == 2 && std::string_view(argv[1]) == "--list-metrics") {
