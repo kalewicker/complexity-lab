@@ -16,7 +16,7 @@ This is a null for joint invariance under independent within-frame site permutat
 
 The [registered engineering fixture](../protocols/E01-categorical-motif-permutation.json) placed the pair `[1, 2]` in every training and test prefix. The observed charged gain was 1,392 bits. The 19 draws included 12 fitted motifs with gains between 1,270 and 1,331 bits and seven completed draws with no motif. The report gave 1/20. Independent Python shuffling preserved every prefix histogram, reproduced all 19 draw tokens and matched the rank. Changing guard data, unused sites and the tail preserved the full CSV.
 
-Controls with no admissible motif and with a negative charged gain both produced ties and a rank of 20/20. A reduced-byte-budget C++ fixture retained failed draws and left the rank unavailable. The fixture results establish replay and accounting for this null. The [calibration design and runner](E01-categorical-motif-calibration.md) define the population check. Population results and structural scoring remain open.
+Controls with no admissible motif and with a negative charged gain both produced ties and a rank of 20/20. A reduced-byte-budget C++ fixture retained failed draws and left the rank unavailable. The fixture results establish replay and accounting for this null. The [registered calibration results](E01-categorical-motif-calibration.md#registered-panel-results) report the false-positive and sensitivity bounds for one synthetic layout.
 
 | Independent artifact | SHA-256 |
 |---|---|

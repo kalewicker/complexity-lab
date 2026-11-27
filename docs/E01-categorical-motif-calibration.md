@@ -34,4 +34,19 @@ Seed namespaces include the protocol ID, mode, world ID and role. The input key 
 
 ## Readiness verification
 
-The four smoke ranks were 68/100 and 100/100 for the null worlds, and 1/100 for both planted worlds. The conformance fixture verified their frame histograms and planted placements, the exact acceptance count boundaries, and reconciliation of a missing receipt, a bad rank, and an unstarted world. An empty full roster audited as 700 unstarted worlds and failed both conservative bounds. The registered calibration panel remains unstarted. The smoke check establishes readiness for this panel. Population results and broader structural scoring remain open.
+The four smoke ranks were 68/100 and 100/100 for the null worlds, and 1/100 for both planted worlds. The conformance fixture verified their frame histograms and planted placements, the exact acceptance count boundaries, and reconciliation of a missing receipt, a bad rank, and an unstarted world. An empty full roster audited as 700 unstarted worlds and failed both conservative bounds. These readiness checks preceded the registered execution.
+
+## Registered panel results
+
+The panel ran from registration commit `2996cafe4677ed69ff5d38bf3450cc739f1f575c` using the macOS arm64 release evaluator. All 700 planned worlds and 69,300 permutations completed on the single registered run. There were zero unresolved and zero unstarted worlds.
+
+| Stratum | Rejected | Observed rate | Registered confidence bound | Result |
+|---|---:|---:|---|---|
+| Exchangeable null | 15 / 350 | 4.29% | False-positive upper bound 6.9702% | Pass |
+| Planted order | 350 / 350 | 100% | Sensitivity lower bound 98.9515% | Pass |
+
+Training admitted no motif in 107 null worlds. Those worlds remained in the denominator with rank 100/100. All planted worlds reached rank 1/100, the finest resolution at the registered draw count.
+
+The read-only audit reproduced the runner's report exactly. A separate calculation checked the roster, frame label counts and planted placements, recomputed ranks from all recorded draw gains, and verified the exact binomial decisions and outward-rounded bounds. The [per-world ledger](evidence/E01-categorical-motif-calibration-v1-worlds.csv) includes trace and receipt digests. The [machine-readable summary](evidence/E01-categorical-motif-calibration-v1-summary.json) includes the manifest, evaluator and report digests and the rank distributions. The local archive of raw traces and evaluator receipts is at `build/categorical-motif-calibration-v1`.
+
+Both criteria passed for this synthetic layout, motif strength and observation budget. Coverage across layouts, dynamical regimes and scales remains open, as does calibration of a structural complexity score.

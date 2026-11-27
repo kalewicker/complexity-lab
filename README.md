@@ -79,4 +79,4 @@ For attributed relational traces, `clab-inspect --metadata` lists the schema and
 - [Frozen categorical motif transfer](docs/E01-categorical-motif-heldout.md)
 - [Temporal categorical motif transfer](docs/E01-categorical-motif-temporal.md)
 - [Temporal motif permutation test](docs/E01-categorical-motif-permutation.md)
-- [Synthetic motif calibration design and runner](docs/E01-categorical-motif-calibration.md)
+- [Synthetic motif calibration design and results](docs/E01-categorical-motif-calibration.md)

@@ -1,0 +1,91 @@
+{
+  "bounds": {
+    "detected_plants": 350,
+    "false_positive_pass": true,
+    "false_positive_upper_millionths": 69702,
+    "possible_false_positives": 15,
+    "sensitivity_lower_millionths": 989515,
+    "sensitivity_pass": true
+  },
+  "completed_permutations": 69300,
+  "evaluator_sha256": "234e70b562cf5e33af1df8ab8e0f9cce78a3790428a8ee1f87bbc80f7c2ceddb",
+  "host": {
+    "architecture": "arm64",
+    "system": "Darwin"
+  },
+  "manifest_sha256": "64d6aac6388d1e181d6afdc442ed586588e936bcaea8fd0544ce2d08df638761",
+  "protocol": "E01-categorical-motif-calibration-v1",
+  "protocol_sha256": "b7b893b9403f7b371dac7680e0c30252e230e43745bec332917b3e00bac704b0",
+  "rank_numerator_histograms": {
+    "exchangeable_null": {
+      "1": 2,
+      "2": 6,
+      "3": 1,
+      "4": 4,
+      "5": 2,
+      "6": 2,
+      "7": 1,
+      "8": 4,
+      "9": 3,
+      "10": 6,
+      "11": 2,
+      "12": 2,
+      "13": 3,
+      "14": 1,
+      "15": 6,
+      "16": 5,
+      "17": 4,
+      "19": 1,
+      "21": 1,
+      "22": 1,
+      "54": 1,
+      "57": 1,
+      "60": 3,
+      "61": 2,
+      "62": 5,
+      "63": 8,
+      "64": 10,
+      "65": 16,
+      "66": 17,
+      "67": 16,
+      "68": 13,
+      "69": 13,
+      "70": 16,
+      "71": 17,
+      "72": 13,
+      "73": 10,
+      "74": 8,
+      "75": 7,
+      "76": 3,
+      "77": 3,
+      "78": 2,
+      "79": 2,
+      "100": 107
+    },
+    "planted_order": {
+      "1": 350
+    }
+  },
+  "registration_commit": "2996cafe4677ed69ff5d38bf3450cc739f1f575c",
+  "report_sha256": "f61eb1f8545349626827ba5bfb8e6c0016d967690931bc3ec2142270656b0000",
+  "strata": {
+    "exchangeable_null": {
+      "rejected": 15,
+      "retained": 335,
+      "unresolved": 0,
+      "unstarted": 0
+    },
+    "planted_order": {
+      "rejected": 350,
+      "retained": 0,
+      "unresolved": 0,
+      "unstarted": 0
+    }
+  },
+  "world_count": 700,
+  "worlds_csv_sha256": "8d8aafc252cbe138a1cd805d3ec16cd905e6a0d70da5a72529cb999069df1f10",
+  "worlds_without_admitted_motif": {
+    "exchangeable_null": 107,
+    "planted_order": 0
+  }
+}
