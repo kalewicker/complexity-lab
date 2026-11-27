@@ -1766,6 +1766,80 @@ def check_motif_calibration_runner(args, directory):
     }
 
 
+def check_site_calibration_runner(args, directory):
+    from calibrate_motifs import SITE_PROTOCOL, roster
+
+    script = Path(__file__).resolve().parents[1] / "scripts/calibrate_motifs.py"
+
+    def invoke(*arguments, code=0):
+        return run(sys.executable, script, *arguments, code=code)
+
+    design = json.loads(invoke("--protocol", "shared-site", "plan"))
+    frame_design = json.loads(invoke("plan"))
+    assert design["protocol"] == "E01-categorical-motif-site-calibration-v1"
+    assert design["protocol_sha256"] != frame_design["protocol_sha256"]
+    decision_fields = ("draws_per_world", "minimum_rank", "rank_cutoff", "tail_error_per_bound",
+                       "worlds_per_stratum", "maximum_possible_false_positives", "minimum_detected_plants")
+    assert tuple(design[key] for key in decision_fields) == tuple(frame_design[key] for key in decision_fields)
+
+    archive = directory / "site-calibration-smoke"
+    smoke = json.loads(invoke("--protocol", "shared-site", "smoke", "--eval", args.eval, "--out", archive))
+    assert smoke == json.loads(invoke("audit", archive))
+    assert not invoke("--protocol", "independent-frame", "audit", archive, code=1)
+    rows = smoke["outcomes"]
+    assert [row["rank"] for row in rows] == [[2, 100], [58, 100], [2, 100], [2, 100]]
+    assert [row["status"] for row in rows] == ["rejected", "retained", "rejected", "rejected"]
+    assert "bounds" not in smoke
+
+    trace_digests = []
+    for row in rows:
+        world = archive / row["id"]
+        receipt = json.loads((world / "receipt.json").read_text())
+        scored, = csv.DictReader(io.StringIO(receipt["stdout"]))
+        assert scored["permutation_id"] == "categorical.shared_site_permutation.v1"
+        assert scored["draws_complete"] == "99" and scored["draws_budget_exceeded"] == "0"
+        trace = (world / "trace.cltr").read_bytes()
+        trace_digests.append(hashlib.sha256(trace).hexdigest())
+        size, = struct.unpack_from("<I", trace, 12)
+        offset = 16 + size
+        frames = []
+        for frame in range(10):
+            labels = struct.unpack_from("<12I", trace, offset + 44)
+            assert sorted(labels) == [1, 2, 3, 4, *range(100 + frame * 8, 108 + frame * 8)]
+            frames.append(labels)
+            offset += 44 + 12 * 4
+        sites = {label: frames[0].index(label) for label in (1, 2, 3, 4)}
+        assert all(frame[index] == label for frame in frames for label, index in sites.items())
+        histories = list(zip(*frames))
+        assert sum(len(set(history)) == 1 for history in histories) == 4
+        assert all(len(set(history)) in (1, 10) for history in histories)
+        if row["stratum"] == "planted_order":
+            assert tuple(sites.values()) == tuple(range(sites[1], sites[1] + 4))
+
+    reserved = list(roster("run", SITE_PROTOCOL))
+    frame_slots = [*roster("run"), *roster("smoke")]
+    all_slots = reserved + rows + frame_slots
+    assert len(reserved) == 700
+    assert len({slot["input_seed"] for slot in all_slots}) == len(all_slots)
+    assert len({slot["permutation_seed"] for slot in all_slots}) == len(all_slots)
+
+    manifest = json.loads((archive / "manifest.json").read_text())
+    empty_panel = directory / "site-calibration-empty"
+    empty_panel.mkdir()
+    (empty_panel / "clab-eval").hardlink_to(archive / "clab-eval")
+    (empty_panel / "manifest.json").write_text(json.dumps(manifest | {"mode": "run", "slots": reserved}))
+    empty = json.loads(invoke("audit", empty_panel))
+    assert all(stratum["unstarted"] == 350 for stratum in empty["strata"].values())
+    assert empty["bounds"]["possible_false_positives"] == 350 and empty["bounds"]["detected_plants"] == 0
+    assert not empty["bounds"]["false_positive_pass"] and not empty["bounds"]["sensitivity_pass"]
+    return {
+        "protocol_sha256": design["protocol_sha256"],
+        "smoke_trace_sha256": trace_digests,
+        "smoke_ranks": [row["rank"] for row in rows],
+        "unstarted_full_panel": len(reserved),
+    }
+
+
 def check_categorical_motif(args, directory):
     def gamma(value):
         binary = f"{value:b}"
@@ -1949,6 +2023,7 @@ def check(args, directory):
         "categorical_motif_permutation": check_categorical_motif_permutation(args, directory),
         "categorical_motif_site_permutation": check_categorical_motif_site_permutation(args, directory),
         "motif_calibration_runner": check_motif_calibration_runner(args, directory),
+        "site_calibration_runner": check_site_calibration_runner(args, directory),
     }
     assert result["categorical_sha256"] == "3dda44df0c60342ddd2b6456bbb350ea66a50141d86dc62ba4e887a0000fc9ba"
     assert result["events_sha256"] == "5f5e31d67be90e5eea677c262b01358df9cc2427ff86a17d975c44f4d34ddac1"
