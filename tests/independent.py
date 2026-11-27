@@ -8,46 +8,19 @@ import hashlib
 import heapq
 import io
 from itertools import groupby
-from math import factorial, prod
+from math import comb, factorial, prod
 import json
 import os
 import signal
 import struct
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 
-META = {
-    "run_id": 'hand-"written"',
-    "encoding": "categorical-u32",
-    "time_unit": "step",
-    "exact": True,
-    "fixed_sites": True,
-}
-
-
-def crc32c(data):
-    # Reflected Castagnoli polynomial, independent of zlib's IEEE CRC32.
-    crc = 0xFFFFFFFF
-    for byte in data:
-        crc ^= byte
-        for _ in range(8):
-            crc = (crc >> 1) ^ (0x82F63B78 if crc & 1 else 0)
-    return crc ^ 0xFFFFFFFF
-
-
-def metadata_header(data, major=1, minor=0):
-    return struct.pack("<4sHHII", b"CLTR", major, minor, 0x01020304, len(data)) + data
-
-
-def header(meta=META):
-    return metadata_header(json.dumps(meta, separators=(",", ":")).encode())
-
-
-def chunk(kind, sequence, time, work, payload=b"", flags=0, version=1):
-    prefix = struct.pack("<HHIQdQII", kind, version, flags, sequence, time, work,
-                         len(payload), len(payload))
-    return prefix + struct.pack("<I", crc32c(prefix + payload)) + payload
+sys.dont_write_bytecode = True
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+from cltr_fixture import META, chunk, crc32c, header, metadata_header
 
 
 def run(tool, *args, code=0):
@@ -1623,6 +1596,101 @@ def check_categorical_motif_permutation(args, directory):
     }
 
 
+def check_motif_calibration_runner(args, directory):
+    from calibrate_motifs import roster, upper_bound_millionths
+
+    script = Path(__file__).resolve().parents[1] / "scripts/calibrate_motifs.py"
+
+    def invoke(*arguments, code=0):
+        return run(sys.executable, script, *arguments, code=code)
+
+    design = json.loads(invoke("plan"))
+    n = design["worlds_per_stratum"]
+    assert (n, design["draws_per_world"], design["minimum_rank"], design["tail_error_per_bound"]) == (
+        350, 99, "1/100", "1/40",
+    )
+    null_ceiling = design["maximum_possible_false_positives"]
+    plant_miss_ceiling = n - design["minimum_detected_plants"]
+    assert (null_ceiling, plant_miss_ceiling) == (23, 55)
+    # Exact independent checks at both sides of each acceptance boundary.
+    for ceiling, denominator in ((null_ceiling, 10), (plant_miss_ceiling, 5)):
+        weight = sum(comb(n, k) * (denominator - 1)**(n - k) for k in range(ceiling + 1))
+        next_weight = comb(n, ceiling + 1) * (denominator - 1)**(n - ceiling - 1)
+        assert weight * 40 <= denominator**n < (weight + next_weight) * 40
+        grid = 10**6
+        upper = upper_bound_millionths(n, ceiling)
+        for point, below in ((upper - 1, False), (upper, True)):
+            numerator = sum(comb(n, k) * point**k * (grid - point)**(n - k)
+                            for k in range(ceiling + 1))
+            assert (numerator * 40 <= grid**n) == below
+
+    archive = directory / "calibration-smoke"
+    smoke = json.loads(invoke("smoke", "--eval", args.eval, "--out", archive))
+    assert smoke == json.loads(invoke("audit", archive))
+    failed_overwrite = invoke("smoke", "--eval", args.eval, "--out", archive, code=1)
+    assert not failed_overwrite and smoke == json.loads(invoke("audit", archive))
+    rows = smoke["outcomes"]
+    assert [row["rank"] for row in rows] == [[68, 100], [100, 100], [1, 100], [1, 100]]
+    assert "bounds" not in smoke
+
+    manifest = json.loads((archive / "manifest.json").read_text())
+    assert manifest["evaluator_sha256"] == hashlib.sha256(Path(args.eval).read_bytes()).hexdigest()
+    reserved = list(roster("run"))
+    assert len(reserved) == 700 and len({slot["input_seed"] for slot in reserved + rows}) == 704
+    assert len({slot["permutation_seed"] for slot in reserved + rows}) == 704
+    trace_digests = []
+    for row in rows:
+        trace = (archive / row["id"] / "trace.cltr").read_bytes()
+        trace_digests.append(hashlib.sha256(trace).hexdigest())
+        size, = struct.unpack_from("<I", trace, 12)
+        offset = 16 + size
+        for frame in range(10):
+            labels = struct.unpack_from("<12I", trace, offset + 44)
+            assert sorted(labels) == [1, 2, 3, 4, *range(100 + frame * 8, 108 + frame * 8)]
+            if row["stratum"] == "planted_order" and frame != 6:
+                start = labels.index(1)
+                assert labels[start:start+4] == (1, 2, 3, 4)
+            offset += 44 + 12 * 4
+
+    (archive / rows[0]["id"]).rename(directory / "held-world")
+    missing = archive / rows[1]["id"] / "receipt.json"
+    missing.rename(missing.with_suffix(".saved"))
+    incorrect = archive / rows[2]["id"] / "receipt.json"
+    receipt = json.loads(incorrect.read_text())
+    field_rows = list(csv.DictReader(io.StringIO(receipt["stdout"])))
+    field_rows[0]["p_numerator"] = "100"
+    buffer = io.StringIO()
+    writer = csv.DictWriter(buffer, fieldnames=list(field_rows[0]))
+    writer.writeheader()
+    writer.writerows(field_rows)
+    receipt["stdout"] = buffer.getvalue()
+    incorrect.write_text(json.dumps(receipt))
+    changed = json.loads(invoke("audit", archive))["outcomes"]
+    assert [row["status"] for row in changed] == ["unstarted", "unresolved", "unresolved", "rejected"]
+    assert [row["reason"] for row in changed[1:3]] == [
+        "missing_receipt", "rank does not reconcile with recorded costs",
+    ]
+
+    empty_panel = directory / "calibration-empty"
+    empty_panel.mkdir()
+    (empty_panel / "clab-eval").hardlink_to(archive / "clab-eval")
+    (empty_panel / "manifest.json").write_text(json.dumps(manifest | {"mode": "run", "slots": reserved}))
+    empty = json.loads(invoke("audit", empty_panel))
+    assert all(stratum["unstarted"] == n for stratum in empty["strata"].values())
+    assert empty["bounds"] == {
+        "possible_false_positives": n, "detected_plants": 0,
+        "false_positive_upper_millionths": 10**6, "sensitivity_lower_millionths": 0,
+        "false_positive_pass": False, "sensitivity_pass": False,
+    }
+    return {
+        "protocol_sha256": design["protocol_sha256"],
+        "smoke_trace_sha256": trace_digests,
+        "smoke_ranks": [row["rank"] for row in rows],
+        "acceptance_counts": [null_ceiling, n - plant_miss_ceiling],
+        "unstarted_full_panel": 2 * n,
+    }
+
+
 def check_categorical_motif(args, directory):
     def gamma(value):
         binary = f"{value:b}"
@@ -1804,6 +1872,7 @@ def check(args, directory):
         "categorical_motif_heldout": check_categorical_motif_heldout(args, directory),
         "categorical_motif_temporal": check_categorical_motif_temporal(args, directory),
         "categorical_motif_permutation": check_categorical_motif_permutation(args, directory),
+        "motif_calibration_runner": check_motif_calibration_runner(args, directory),
     }
     assert result["categorical_sha256"] == "3dda44df0c60342ddd2b6456bbb350ea66a50141d86dc62ba4e887a0000fc9ba"
     assert result["events_sha256"] == "5f5e31d67be90e5eea677c262b01358df9cc2427ff86a17d975c44f4d34ddac1"

@@ -1,0 +1,23 @@
+{
+  "protocol": "E01-categorical-motif-calibration-v1",
+  "permutation_id": "categorical.frame_permutation.v1",
+  "split": {"train": 6, "guard": 1, "test": 3, "sites": 12},
+  "population": {
+    "worlds_per_stratum": 350,
+    "strata": ["exchangeable_null", "planted_order"],
+    "motif": [1, 2, 3, 4],
+    "nuisance_label_start": 100,
+    "generator": "sha256-counter-fisher-yates-v1"
+  },
+  "decision": {
+    "draws": 99,
+    "rank_cutoff": [1, 20],
+    "family_error": [1, 20],
+    "maximum_false_positive_rate": [1, 10],
+    "minimum_sensitivity": [4, 5],
+    "planning_false_positive_rate": [1, 20],
+    "planning_sensitivity": [9, 10]
+  },
+  "execution": {"timeout_seconds_per_world": 20, "smoke_worlds_per_stratum": 2},
+  "limits": "single synthetic layout at one observation budget; report simultaneous one-sided bounds for the two strata; unresolved nulls count as possible rejections and unresolved plants as misses"
+}
