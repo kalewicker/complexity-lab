@@ -55,6 +55,7 @@ score_categorical_motif_temporal(IObservationSource& source, TemporalCategorical
 
 inline constexpr std::size_t temporal_motif_permutation_limit = 199;
 inline constexpr std::string_view temporal_motif_permutation_id = "categorical.frame_permutation.v1";
+inline constexpr std::string_view temporal_motif_site_permutation_id = "categorical.shared_site_permutation.v1";
 
 struct TemporalMotifPermutationDraw {
     MetricStatus status{MetricStatus::valid};
@@ -71,4 +72,8 @@ struct TemporalMotifPermutationResult {
 [[nodiscard]] TemporalMotifPermutationResult
 score_categorical_motif_permutations(IObservationSource& source, TemporalCategoricalSplit split,
                                      std::size_t draws, std::uint64_t seed, CodeLimits limits = {});
+
+[[nodiscard]] TemporalMotifPermutationResult
+score_categorical_motif_site_permutations(IObservationSource& source, TemporalCategoricalSplit split,
+                                          std::size_t draws, std::uint64_t seed, CodeLimits limits = {});
 }

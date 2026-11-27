@@ -10,7 +10,7 @@ The generator uses Fisher–Yates with one SplitMix64 stream initialized by `SEE
 
 The statistic is the positive part of model-charged gain in bits. A completed split that admits no training motif contributes zero. The one-sided rank is `(1 + number of draw statistics at least as large as observed) / (DRAWS + 1)`, counting ties. The CSV reports the exact numerator and denominator, the observed costs and statistic, and the draw counts. `draw_gains_bits` holds one token per draw in generation order, using the signed charged gain, `absent` for a completed draw with no admitted motif, or `budget_exceeded` for a failed draw. Any failed draw leaves the rank blank. The scorer still attempts the full scheduled draw count. An incomplete observed split starts zero draws.
 
-This is a null for joint invariance under independent within-frame site permutations. Such permutations remove spatial arrangement and can disrupt temporal correspondence at fixed sites. Use the rank as a descriptive comparison when the trace does not support that exchangeability assumption. The smallest possible rank with 19 draws is 1/20.
+This is a null for joint invariance under independent within-frame site permutations. Such permutations remove spatial arrangement and can disrupt temporal correspondence at fixed sites. Use the rank as a descriptive comparison when the trace does not support that exchangeability assumption. The [shared-site permutation](E01-categorical-motif-site-permutation.md) preserves scored site histories. The smallest possible rank with 19 draws is 1/20.
 
 ## Verification
 

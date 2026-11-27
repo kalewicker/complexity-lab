@@ -51,6 +51,7 @@ int usage() {
               << "       clab-eval --categorical-heldout TRAIN GUARD TEST TRACE.cltr\n"
               << "       clab-eval --categorical-motif-temporal TRAIN GUARD TEST SITES TRACE.cltr\n"
               << "       clab-eval --categorical-motif-permutation TRAIN GUARD TEST SITES DRAWS SEED TRACE.cltr\n"
+              << "       clab-eval --categorical-motif-site-permutation TRAIN GUARD TEST SITES DRAWS SEED TRACE.cltr\n"
               << "       clab-eval --categorical-temporal TRAIN GUARD TEST SITES TRACE.cltr\n";
     return 2;
 }
@@ -394,6 +395,7 @@ void report_temporal(clab::TraceReader& trace, std::ostream& out, clab::Temporal
 struct PermutationOptions {
     std::size_t count;
     std::uint64_t seed;
+    bool shared_sites;
 };
 
 void write_permutation_costs(std::ostream& out, const clab::TemporalMotifPermutationResult& result,
@@ -405,7 +407,9 @@ void write_permutation_costs(std::ostream& out, const clab::TemporalMotifPermuta
             absent += !draw.charged_gain_bits;
         }
     }
-    out << ',' << clab::temporal_motif_permutation_id << ',' << options.seed << ',' << options.count
+    const auto id = options.shared_sites ? clab::temporal_motif_site_permutation_id
+                                         : clab::temporal_motif_permutation_id;
+    out << ',' << id << ',' << options.seed << ',' << options.count
         << ',' << complete << ',' << absent << ',' << result.draws.size() - complete << ',';
     if (result.observed.costs) {
         out << std::max<std::int64_t>(0, result.observed.costs->charged_gain_bits().value_or(0));
@@ -431,8 +435,10 @@ void write_permutation_costs(std::ostream& out, const clab::TemporalMotifPermuta
 
 void report_motif_temporal(clab::TraceReader& trace, std::ostream& out, clab::TemporalCategoricalSplit split,
                            std::optional<PermutationOptions> options = std::nullopt) {
+    const auto score = options && options->shared_sites ? clab::score_categorical_motif_site_permutations
+                                                        : clab::score_categorical_motif_permutations;
     const auto evaluation = options
-        ? clab::score_categorical_motif_permutations(trace, split, options->count, options->seed)
+        ? score(trace, split, options->count, options->seed, {})
         : clab::TemporalMotifPermutationResult{clab::score_categorical_motif_temporal(trace, split), {}, {}};
     const auto& result = evaluation.observed;
     std::string columns = "baseline_id,model_bits,test_header_bits,placement_bits,residual_bits,test_bits,"
@@ -480,9 +486,9 @@ int main(int argc, char** argv) {
             report_categorical_motifs(trace, out);
             return 0;
         }
-        if (mode == "--categorical-temporal" || mode == "--categorical-motif-temporal" ||
-            mode == "--categorical-motif-permutation") {
-            const bool permutation = mode == "--categorical-motif-permutation";
+        const bool shared_site_permutation = mode == "--categorical-motif-site-permutation";
+        const bool permutation = shared_site_permutation || mode == "--categorical-motif-permutation";
+        if (mode == "--categorical-temporal" || mode == "--categorical-motif-temporal" || permutation) {
             if (argc != (permutation ? 9 : 7)) {
                 return usage();
             }
@@ -500,7 +506,7 @@ int main(int argc, char** argv) {
                     std::cerr << "clab-eval: invalid permutation draw count or seed\n";
                     return 2;
                 }
-                options = PermutationOptions{*draws, *seed};
+                options = PermutationOptions{*draws, *seed, shared_site_permutation};
             }
             clab::TraceReader trace(argv[permutation ? 8 : 6]);
             const clab::TemporalCategoricalSplit split{*train, *guard, *test, *sites};

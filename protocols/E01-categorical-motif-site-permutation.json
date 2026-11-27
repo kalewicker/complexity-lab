@@ -1,0 +1,8 @@
+{
+  "protocol": "E01-categorical-motif-site-permutation-v1",
+  "scope": "one temporal motif window under joint exchangeability of scored site histories",
+  "surrogate": "Fisher-Yates shuffle site indexes once per draw and apply the same index order to every scored training and test prefix; preserve the multiset of site histories and every frame histogram",
+  "pipeline": "reuse the exact temporal training gate, per-draw motif and Huffman refit, held-out score, signed charged gains, and conservative rank from the independent frame permutation evaluator",
+  "controls": "a repeated stationary frame with distinct labels must tie under shared-site permutation; compare with independent frame permutation; independently replay a nonstationary fixture and verify preservation of the site histories",
+  "limits": "synthetic engineering fixtures only. Inference requires joint invariance under shared site permutations. Population calibration for this new null remains open."
+}

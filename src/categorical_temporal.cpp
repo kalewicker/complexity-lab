@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <numeric>
 #include <utility>
 
 namespace clab {
@@ -182,40 +183,60 @@ TemporalCategoricalMotifResult score_motif_window(IObservationSource& source, Te
     return result;
 }
 
-void permute_frames(std::span<TypeId> frames, std::size_t sites, std::uint64_t& seed) {
-    for (std::size_t offset = 0; offset < frames.size(); offset += sites) {
-        auto frame = frames.subspan(offset, sites);
-        for (std::uint64_t bound = sites; bound > 1; --bound) {
-            // Reject the partial interval before reducing SplitMix64 output modulo the bound.
-            const auto threshold = (std::uint64_t{0} - bound) % bound;
-            std::uint64_t value;
-            do {
-                seed += UINT64_C(0x9e3779b97f4a7c15);
-                value = seed;
-                value = (value ^ (value >> 30)) * UINT64_C(0xbf58476d1ce4e5b9);
-                value = (value ^ (value >> 27)) * UINT64_C(0x94d049bb133111eb);
-                value ^= value >> 31;
-            } while (value < threshold);
-            std::swap(frame[bound - 1], frame[value % bound]);
-        }
+template <typename Item>
+void shuffle_sites(std::span<Item> items, std::uint64_t& seed) {
+    for (std::uint64_t bound = items.size(); bound > 1; --bound) {
+        // Reject the partial interval before reducing SplitMix64 output modulo the bound.
+        const auto threshold = (std::uint64_t{0} - bound) % bound;
+        std::uint64_t value;
+        do {
+            seed += UINT64_C(0x9e3779b97f4a7c15);
+            value = seed;
+            value = (value ^ (value >> 30)) * UINT64_C(0xbf58476d1ce4e5b9);
+            value = (value ^ (value >> 27)) * UINT64_C(0x94d049bb133111eb);
+            value ^= value >> 31;
+        } while (value < threshold);
+        std::swap(items[bound - 1], items[value % bound]);
     }
 }
+
+MotifWindows permute_independent_frames(const MotifWindows& original, std::size_t sites, std::uint64_t& seed) {
+    auto permuted = original;
+    for (auto frames : {std::span(permuted.training), std::span(permuted.test)}) {
+        for (std::size_t offset = 0; offset < frames.size(); offset += sites) {
+            shuffle_sites(frames.subspan(offset, sites), seed);
+        }
+    }
+    return permuted;
+}
+
+MotifWindows permute_shared_sites(const MotifWindows& original, std::size_t sites, std::uint64_t& seed) {
+    std::vector<std::size_t> order(sites);
+    std::iota(order.begin(), order.end(), std::size_t{0});
+    shuffle_sites(std::span(order), seed);
+    const auto apply = [&](const std::vector<TypeId>& frames) {
+        std::vector<TypeId> permuted;
+        permuted.reserve(frames.size());
+        for (std::size_t offset = 0; offset < frames.size(); offset += sites) {
+            for (auto source : order) {
+                permuted.push_back(frames[offset + source]);
+            }
+        }
+        return permuted;
+    };
+    return {apply(original.training), apply(original.test)};
+}
+
+using PermuteWindow = MotifWindows (*)(const MotifWindows&, std::size_t, std::uint64_t&);
 
 std::int64_t positive_gain(std::optional<std::int64_t> gain) {
     return std::max<std::int64_t>(0, gain.value_or(0));
 }
-}
 
-TemporalCategoricalMotifResult score_categorical_motif_temporal(IObservationSource& source,
-                                                                 TemporalCategoricalSplit split,
-                                                                 CodeLimits limits) {
-    return score_motif_window(source, split, limits);
-}
-
-TemporalMotifPermutationResult score_categorical_motif_permutations(IObservationSource& source,
-                                                                     TemporalCategoricalSplit split,
-                                                                     std::size_t count, std::uint64_t seed,
-                                                                     CodeLimits limits) {
+TemporalMotifPermutationResult score_motif_permutations(IObservationSource& source,
+                                                        TemporalCategoricalSplit split,
+                                                        std::size_t count, std::uint64_t seed,
+                                                        CodeLimits limits, PermuteWindow permute) {
     if (!count || count > temporal_motif_permutation_limit) {
         throw Error(ErrorCode::invalid, "temporal motif permutation draw count is outside its bounds");
     }
@@ -230,9 +251,7 @@ TemporalMotifPermutationResult score_categorical_motif_permutations(IObservation
     std::size_t at_least = 0;
     bool complete = true;
     for (std::size_t draw = 0; draw < count; ++draw) {
-        auto permuted = windows;
-        permute_frames(permuted.training, split.sites, seed);
-        permute_frames(permuted.test, split.sites, seed);
+        const auto permuted = permute(windows, split.sites, seed);
         TemporalMotifScorer scorer;
         TemporalCategoricalMotifCosts costs;
         try {
@@ -256,5 +275,26 @@ TemporalMotifPermutationResult score_categorical_motif_permutations(IObservation
         result.at_least_observed = at_least;
     }
     return result;
+}
+}
+
+TemporalCategoricalMotifResult score_categorical_motif_temporal(IObservationSource& source,
+                                                                 TemporalCategoricalSplit split,
+                                                                 CodeLimits limits) {
+    return score_motif_window(source, split, limits);
+}
+
+TemporalMotifPermutationResult score_categorical_motif_permutations(IObservationSource& source,
+                                                                     TemporalCategoricalSplit split,
+                                                                     std::size_t count, std::uint64_t seed,
+                                                                     CodeLimits limits) {
+    return score_motif_permutations(source, split, count, seed, limits, permute_independent_frames);
+}
+
+TemporalMotifPermutationResult score_categorical_motif_site_permutations(IObservationSource& source,
+                                                                          TemporalCategoricalSplit split,
+                                                                          std::size_t count, std::uint64_t seed,
+                                                                          CodeLimits limits) {
+    return score_motif_permutations(source, split, count, seed, limits, permute_shared_sites);
 }
 }

@@ -101,11 +101,13 @@ int main(int argc, char** argv) {
     if (motif_temporal.status != clab::MetricStatus::insufficient_data || motif_temporal.train_seen != 1) {
         return 1;
     }
-    clab::TraceReader permutation_trace(path);
-    const auto permutation = clab::score_categorical_motif_permutations(permutation_trace, {1, 1, 1, 2}, 1, 0);
-    if (permutation.observed.status != clab::MetricStatus::insufficient_data ||
-        !permutation.draws.empty() || permutation.at_least_observed) {
-        return 1;
+    for (auto score : {clab::score_categorical_motif_permutations, clab::score_categorical_motif_site_permutations}) {
+        clab::TraceReader permutation_trace(path);
+        const auto permutation = score(permutation_trace, {1, 1, 1, 2}, 1, 0, {});
+        if (permutation.observed.status != clab::MetricStatus::insufficient_data ||
+            !permutation.draws.empty() || permutation.at_least_observed) {
+            return 1;
+        }
     }
     const auto stats = cache.stats();
     return stats.stores + stats.hits == 1 && found_entropy && found_entity && trace.status() == clab::TraceStatus::complete ? 0 : 1;
