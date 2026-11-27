@@ -1,0 +1,12 @@
+{
+  "protocol": "E01-categorical-motif-heldout-v1",
+  "scope": "one training-selected contiguous categorical motif per snapshot with a frozen test region and a training-fitted Huffman comparator",
+  "design": {
+    "split": "positive training and test counts, nonnegative guard, disjoint prefixes in snapshot order; at most 4096 symbols in each scored region",
+    "fit": "admit the shortest training motif only when its complete training frame strictly beats all five exact training baselines; fit Huffman on the same training symbols",
+    "test": "freeze both models; charge exact test headers, motif placements, and residuals; report conditional and once-model-charged gain relative to frozen Huffman, including negative results",
+    "controls": "test the learned order and a reordered test with identical label counts; mutate guard and tail; retain rows with no admitted training motif and zero test occurrences",
+    "verification": "independent serialized bit lengths, exact decoder round trip without training, fit isolation, limits, malformed inputs, and three-platform installed conformance"
+  },
+  "limits": "synthetic within-snapshot transfer fixtures only. Statistical calibration, temporal transfer, dictionary growth, and structural scores remain open."
+}

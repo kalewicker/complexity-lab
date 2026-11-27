@@ -17,7 +17,7 @@ using categorical_detail::symbol_bits;
 using categorical_detail::write_symbols;
 
 constexpr std::uint8_t motif_tag = 5;
-constexpr std::size_t min_width = 2, max_width = 6;
+constexpr std::size_t min_width = 2, max_width = categorical_motif_max_width;
 
 void check_region(std::uint64_t count, CodeLimits limits) {
     if (count > std::min(limits.symbols, categorical_iid_symbol_limit)) {
@@ -48,6 +48,69 @@ std::vector<std::size_t> find_placements(std::span<const TypeId> symbols,
     return starts;
 }
 
+void write_pattern(BitWriter& writer, std::span<const TypeId> pattern) {
+    writer.gamma(pattern.size());
+    write_symbols(writer, pattern);
+}
+
+std::vector<TypeId> read_pattern(BitReader& reader, std::uint64_t count = max_width) {
+    const auto width = reader.gamma();
+    if (width < min_width || width > max_width || width > count) {
+        throw Error(ErrorCode::invalid, "invalid categorical motif width");
+    }
+    return read_symbols(reader, static_cast<std::size_t>(width));
+}
+
+std::uint64_t write_gaps_and_residual(BitWriter& writer, std::span<const TypeId> symbols,
+                                      std::span<const std::size_t> starts, std::size_t width) {
+    std::size_t cursor = 0;
+    for (auto start : starts) {
+        writer.gamma(start - cursor + 1);
+        cursor = start + width;
+    }
+    const auto placement_end = writer.position();
+    cursor = 0;
+    for (auto start : starts) {
+        write_symbols(writer, symbols.subspan(cursor, start - cursor));
+        cursor = start + width;
+    }
+    write_symbols(writer, symbols.subspan(cursor));
+    return placement_end;
+}
+
+std::vector<TypeId> read_gaps_and_residual(BitReader& reader, std::span<const TypeId> pattern,
+                                           std::uint64_t count, std::uint64_t placements) {
+    const auto width = pattern.size();
+    if (placements > count / width) {
+        throw Error(ErrorCode::invalid, "invalid categorical motif placement count");
+    }
+    std::vector<std::size_t> gaps;
+    std::uint64_t cursor = 0;
+    for (std::uint64_t i = 0; i < placements; ++i) {
+        const auto gap = reader.gamma() - 1;
+        if (width > count - cursor || gap > count - cursor - width) {
+            throw Error(ErrorCode::invalid, "categorical motif placement exceeds region");
+        }
+        gaps.push_back(static_cast<std::size_t>(gap));
+        cursor += gap + width;
+    }
+
+    const auto residual = read_symbols(reader, static_cast<std::size_t>(count - placements * width));
+    if (reader.remaining()) {
+        throw Error(ErrorCode::invalid, "trailing categorical motif bits");
+    }
+    std::vector<TypeId> result;
+    result.reserve(static_cast<std::size_t>(count));
+    auto rest = std::span(residual);
+    for (auto gap : gaps) {
+        result.insert(result.end(), rest.begin(), rest.begin() + gap);
+        result.insert(result.end(), pattern.begin(), pattern.end());
+        rest = rest.subspan(gap);
+    }
+    result.insert(result.end(), rest.begin(), rest.end());
+    return result;
+}
+
 CategoricalMotif encode_motif(std::span<const TypeId> symbols, std::span<const TypeId> pattern,
                              CodeLimits limits) {
     auto starts = find_placements(symbols, pattern);
@@ -55,25 +118,13 @@ CategoricalMotif encode_motif(std::span<const TypeId> symbols, std::span<const T
     writer.put(motif_tag, categorical_family_bits);
     writer.gamma(symbols.size() + 1);
     CodeLength length{writer.position()};
-    writer.gamma(pattern.size());
-    write_symbols(writer, pattern);
+    write_pattern(writer, pattern);
     length.model_bits = writer.position() - length.header_bits;
-
     writer.gamma(starts.size());
-    std::size_t cursor = 0;
-    for (auto start : starts) {
-        writer.gamma(start - cursor + 1);
-        cursor = start + pattern.size();
-    }
-    const auto placement_bits = writer.position() - length.header_bits - length.model_bits;
-    cursor = 0;
-    for (auto start : starts) {
-        write_symbols(writer, symbols.subspan(cursor, start - cursor));
-        cursor = start + pattern.size();
-    }
-    write_symbols(writer, symbols.subspan(cursor));
+    const auto placement_end = write_gaps_and_residual(writer, symbols, starts, pattern.size());
     length.data_bits = writer.position() - length.header_bits - length.model_bits;
-    return {{writer.take_bytes(), length}, {pattern.begin(), pattern.end()}, std::move(starts), placement_bits};
+    return {{writer.take_bytes(), length}, {pattern.begin(), pattern.end()}, std::move(starts),
+            placement_end - length.header_bits - length.model_bits};
 }
 }
 
@@ -135,39 +186,59 @@ std::vector<TypeId> decode_categorical_motif(std::span<const std::uint8_t> bytes
     }
     const auto count = reader.gamma() - 1;
     check_region(count, limits);
-    const auto width = reader.gamma();
-    if (width < min_width || width > max_width || width > count) {
-        throw Error(ErrorCode::invalid, "invalid categorical motif width");
-    }
-    const auto pattern = read_symbols(reader, static_cast<std::size_t>(width));
+    const auto pattern = read_pattern(reader, count);
     const auto placements = reader.gamma();
-    if (placements < 2 || placements > count / width) {
+    if (placements < 2) {
         throw Error(ErrorCode::invalid, "invalid categorical motif placement count");
     }
-    std::vector<std::size_t> gaps;
-    std::uint64_t cursor = 0;
-    for (std::uint64_t i = 0; i < placements; ++i) {
-        const auto gap = reader.gamma() - 1;
-        if (width > count - cursor || gap > count - cursor - width) {
-            throw Error(ErrorCode::invalid, "categorical motif placement exceeds region");
-        }
-        gaps.push_back(static_cast<std::size_t>(gap));
-        cursor += gap + width;
-    }
+    return read_gaps_and_residual(reader, pattern, count, placements);
+}
 
-    const auto residual = read_symbols(reader, static_cast<std::size_t>(count - placements * width));
+FrozenCategoricalMotif::FrozenCategoricalMotif(std::span<const TypeId> pattern, CodeLimits limits)
+    : width_(pattern.size()) {
+    std::ranges::copy(pattern, pattern_.begin());
+    BitWriter writer(limits.encoded_bytes);
+    write_pattern(writer, pattern);
+    const CodeLength length{0, writer.position(), 0};
+    model_ = {writer.take_bytes(), length};
+}
+
+std::optional<FrozenCategoricalMotif> FrozenCategoricalMotif::fit(std::span<const TypeId> training,
+                                                                 CodeLimits limits) {
+    auto comparison = compare_categorical_motif(training, limits);
+    if (!comparison.improves_baseline()) {
+        return std::nullopt;
+    }
+    return FrozenCategoricalMotif(comparison.motif->pattern, limits);
+}
+
+FrozenCategoricalMotif FrozenCategoricalMotif::from_bytes(std::span<const std::uint8_t> bytes,
+                                                          std::uint64_t bits, CodeLimits limits) {
+    BitReader reader(bytes, bits, limits.encoded_bytes);
+    const auto pattern = read_pattern(reader);
     if (reader.remaining()) {
-        throw Error(ErrorCode::invalid, "trailing categorical motif bits");
+        throw Error(ErrorCode::invalid, "trailing frozen motif model bits");
     }
-    std::vector<TypeId> result;
-    result.reserve(static_cast<std::size_t>(count));
-    auto rest = std::span(residual);
-    for (auto gap : gaps) {
-        result.insert(result.end(), rest.begin(), rest.begin() + gap);
-        result.insert(result.end(), pattern.begin(), pattern.end());
-        rest = rest.subspan(gap);
-    }
-    result.insert(result.end(), rest.begin(), rest.end());
-    return result;
+    return FrozenCategoricalMotif(pattern, limits);
+}
+
+EncodedFrozenMotif FrozenCategoricalMotif::encode(std::span<const TypeId> test, CodeLimits limits) const {
+    check_region(test.size(), limits);
+    auto starts = find_placements(test, std::span(pattern_).first(width_));
+    BitWriter writer(limits.encoded_bytes);
+    writer.gamma(test.size() + 1);
+    CodeLength length{writer.position()};
+    writer.gamma(starts.size() + 1);
+    const auto placement_end = write_gaps_and_residual(writer, test, starts, width_);
+    length.data_bits = writer.position() - length.header_bits;
+    return {{writer.take_bytes(), length}, std::move(starts), placement_end - length.header_bits};
+}
+
+std::vector<TypeId> FrozenCategoricalMotif::decode(std::span<const std::uint8_t> bytes,
+                                                   std::uint64_t bits, CodeLimits limits) const {
+    BitReader reader(bytes, bits, limits.encoded_bytes);
+    const auto count = reader.gamma() - 1;
+    check_region(count, limits);
+    return read_gaps_and_residual(reader, std::span(pattern_).first(width_), count, reader.gamma() - 1);
 }
 }

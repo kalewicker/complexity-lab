@@ -650,6 +650,17 @@ void categorical_motif_fixtures() {
     require(clab::decode_categorical_motif(result.motif->encoded.bytes, 1062) == separated,
             "categorical motif residual round trip");
 
+    const auto frozen = clab::FrozenCategoricalMotif::fit(separated);
+    require(frozen && frozen->model_code().length == clab::CodeLength{0, 197, 0} &&
+            !clab::FrozenCategoricalMotif::fit(short_sequence),
+            "frozen motif admits strict training wins");
+    const auto restored = clab::FrozenCategoricalMotif::from_bytes(frozen->model_code().bytes, 197);
+    const std::vector<clab::TypeId> once{9, 1, 2, 3, 4, 5, 6, 8};
+    const auto encoded_once = frozen->encode(once);
+    require(encoded_once.placements == std::vector<std::size_t>{1} &&
+            restored.decode(encoded_once.code.bytes, encoded_once.code.length.total_bits()) == once,
+            "frozen motif single test occurrence");
+
     const std::vector<clab::TypeId> tied{9, 9, 1, 9, 1, 9};
     const auto tie = clab::compare_categorical_motif(tied);
     require(tie.motif && tie.motif->pattern == std::vector<clab::TypeId>{9, 1},
@@ -681,6 +692,42 @@ void categorical_motif_fixtures() {
     expect_error(clab::ErrorCode::limit, [&] {
         (void)clab::compare_categorical_motif(std::vector<clab::TypeId>(4097, 7));
     });
+}
+
+void frozen_motif_fixtures() {
+    const auto model = hex_bytes("400000002000000040");
+    const auto frozen = clab::FrozenCategoricalMotif::from_bytes(model, 67);
+    require(frozen.model_code().length == clab::CodeLength{0, 67, 0} && frozen.model_code().bytes == model,
+            "frozen motif golden model");
+    const std::vector<clab::TypeId> test{9, 1, 2, 1, 2, 8};
+    const auto encoded = frozen.encode(test);
+    const auto golden = hex_bytes("3b500000009000000080");
+    require(encoded.code.bytes == golden && encoded.code.length == clab::CodeLength{5, 0, 71} &&
+            encoded.placements == std::vector<std::size_t>{1, 3} && encoded.placement_bits == 7,
+            "frozen motif golden test frame");
+    require(frozen.decode(golden, 76) == test, "frozen motif exact reconstruction");
+
+    const auto empty = frozen.encode({});
+    require(empty.code.bytes == hex_bytes("c0") && empty.code.length.total_bits() == 2 &&
+            frozen.decode(empty.code.bytes, 2).empty(), "frozen motif empty frame");
+    const std::vector<clab::TypeId> absent{2, 1, 0xffffffffu};
+    const auto encoded_absent = frozen.encode(absent);
+    require(encoded_absent.placements.empty() && encoded_absent.placement_bits == 1 &&
+            frozen.decode(encoded_absent.code.bytes, encoded_absent.code.length.total_bits()) == absent,
+            "frozen motif zero test occurrences preserve residual");
+
+    expect_error(clab::ErrorCode::invalid, [&] {
+        (void)clab::FrozenCategoricalMotif::from_bytes(hex_bytes("80"), 1);
+    });
+    expect_error(clab::ErrorCode::invalid, [&] {
+        (void)clab::FrozenCategoricalMotif::from_bytes(model, 68);
+    });
+    expect_error(clab::ErrorCode::invalid, [&] { (void)frozen.decode(hex_bytes("3940"), 10); });
+    expect_error(clab::ErrorCode::invalid, [&] { (void)frozen.decode(hex_bytes("3b340000002400000020"), 78); });
+    expect_error(clab::ErrorCode::incomplete, [&] { (void)frozen.decode(golden, 75); });
+    expect_error(clab::ErrorCode::limit, [&] { (void)frozen.decode(golden, 76, {5, 10}); });
+    expect_error(clab::ErrorCode::limit, [&] { (void)frozen.encode(test, {6, 9}); });
+    expect_error(clab::ErrorCode::limit, [&] { (void)clab::FrozenCategoricalMotif::from_bytes(model, 67, {6, 8}); });
 }
 
 void categorical_heldout_fixtures() {
@@ -833,6 +880,7 @@ int main() {
         iid_code_fixtures();
         categorical_comparison_fixtures();
         categorical_motif_fixtures();
+        frozen_motif_fixtures();
         categorical_heldout_fixtures();
         temporal_categorical_fixtures(temp.path);
 #ifdef CLAB_TEST_SUBSTRATES

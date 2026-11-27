@@ -45,6 +45,14 @@ int main(int argc, char** argv) {
             motif.motif->encoded.bytes, motif.motif->encoded.length.total_bits()), motif_witness)) {
         return 1;
     }
+    const auto frozen_motif = clab::FrozenCategoricalMotif::from_bytes(
+        std::array<std::uint8_t, 9>{0x40, 0, 0, 0, 0x20, 0, 0, 0, 0x40}, 67);
+    const std::array<clab::TypeId, 4> frozen_witness{1, 2, 1, 2};
+    const auto motif_test = frozen_motif.encode(frozen_witness);
+    if (!std::ranges::equal(frozen_motif.decode(motif_test.code.bytes, motif_test.code.length.total_bits()),
+                           frozen_witness)) {
+        return 1;
+    }
     const auto fitted = clab::FrozenCategoricalModel::fit(witness);
     const auto& model = fitted.model_code();
     const auto restored = clab::FrozenCategoricalModel::from_bytes(model.bytes, model.length.total_bits());

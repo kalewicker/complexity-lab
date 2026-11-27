@@ -45,6 +45,7 @@ int usage() {
               << "       clab-eval --categorical-iid TRACE.cltr\n"
               << "       clab-eval --categorical-compare TRACE.cltr\n"
               << "       clab-eval --categorical-motif TRACE.cltr\n"
+              << "       clab-eval --categorical-motif-heldout TRAIN GUARD TEST TRACE.cltr\n"
               << "       clab-eval --categorical-heldout TRAIN GUARD TEST TRACE.cltr\n"
               << "       clab-eval --categorical-temporal TRAIN GUARD TEST SITES TRACE.cltr\n";
     return 2;
@@ -238,11 +239,16 @@ struct HeldOutSplit {
     std::size_t training, guard, test;
 };
 
-void report_heldout(clab::TraceReader& trace, std::ostream& out, HeldOutSplit split) {
+void report_heldout(clab::TraceReader& trace, std::ostream& out, HeldOutSplit split, bool motif) {
     out.imbue(std::locale::classic());
-    out << "run_id,sequence,work,encoding,exact,symbol_count,train_symbols,guard_symbols,test_symbols,"
-           "code_id,model_bits,test_header_bits,test_data_bits,test_bits,raw_bits,unseen_symbols,"
-           "conditional_gain_bits,charged_gain_bits,status\n";
+    out << "run_id,sequence,work,encoding,exact,symbol_count,train_symbols,guard_symbols,test_symbols,code_id,";
+    if (motif) {
+        out << "baseline_id,model_bits,test_header_bits,placement_bits,residual_bits,test_bits,occurrences,"
+               "baseline_model_bits,baseline_test_bits,conditional_gain_bits,charged_gain_bits,status\n";
+    } else {
+        out << "model_bits,test_header_bits,test_data_bits,test_bits,raw_bits,unseen_symbols,"
+               "conditional_gain_bits,charged_gain_bits,status\n";
+    }
     const auto minimum = clab::checked_add(clab::checked_add(split.training, split.guard), split.test);
     bool saw_categorical = false;
     const auto write_prefix = [&](const clab::ObservationRecord* record, std::size_t count) {
@@ -261,10 +267,13 @@ void report_heldout(clab::TraceReader& trace, std::ostream& out, HeldOutSplit sp
             out << count;
         }
         out << ',' << split.training << ',' << split.guard << ',' << split.test << ','
-            << clab::categorical_frozen_code_id << ',';
+            << (motif ? clab::categorical_frozen_motif_code_id : clab::categorical_frozen_code_id) << ',';
+        if (motif) {
+            out << clab::categorical_frozen_code_id << ',';
+        }
     };
-    const auto write_missing = [&](clab::MetricStatus status) {
-        out << ",,,,,,,," << status_name(status) << '\n';
+    const auto write_missing = [&](std::string_view status) {
+        out << (motif ? ",,,,,,,,,," : ",,,,,,,,") << status << '\n';
     };
     while (const auto record = trace.next()) {
         const auto* snapshot = std::get_if<clab::Snapshot>(&record->payload);
@@ -275,15 +284,39 @@ void report_heldout(clab::TraceReader& trace, std::ostream& out, HeldOutSplit sp
         const auto symbols = snapshot->symbols();
         write_prefix(&*record, symbols.size());
         if (symbols.size() < minimum) {
-            write_missing(clab::MetricStatus::insufficient_data);
+            write_missing("insufficient_data");
             continue;
         }
         try {
-            const auto fitted = clab::FrozenCategoricalModel::fit(symbols.first(split.training));
+            const auto training = symbols.first(split.training);
             const auto test = symbols.subspan(split.training + split.guard, split.test);
+            if (motif && test.size() > clab::categorical_iid_symbol_limit) {
+                write_missing("budget_exceeded");
+                continue;
+            }
+            const auto fitted = clab::FrozenCategoricalModel::fit(training);
             const auto encoded = fitted.encode(test);
             const auto model_bits = fitted.model_code().length.total_bits();
             const auto test_bits = encoded.code.length.total_bits();
+            if (motif) {
+                const auto dictionary = clab::FrozenCategoricalMotif::fit(training);
+                if (!dictionary) {
+                    out << ",,,,,," << model_bits << ',' << test_bits << ",,,no_training_motif\n";
+                    continue;
+                }
+                const auto motif_test = dictionary->encode(test);
+                const auto motif_model_bits = dictionary->model_code().length.total_bits();
+                const auto& test_length = motif_test.code.length;
+                const auto conditional = static_cast<std::int64_t>(test_bits)
+                                       - static_cast<std::int64_t>(test_length.total_bits());
+                const auto charged = conditional + static_cast<std::int64_t>(model_bits)
+                                   - static_cast<std::int64_t>(motif_model_bits);
+                out << motif_model_bits << ',' << test_length.header_bits << ',' << motif_test.placement_bits
+                    << ',' << test_length.data_bits - motif_test.placement_bits << ',' << test_length.total_bits()
+                    << ',' << motif_test.placements.size() << ',' << model_bits << ',' << test_bits
+                    << ',' << conditional << ',' << charged << ",valid\n";
+                continue;
+            }
             // The raw comparator uses the same length frame and external family choice.
             const auto raw_bits = clab::checked_add(encoded.code.length.header_bits,
                                                     clab::checked_multiply(test.size(), 32));
@@ -296,12 +329,12 @@ void report_heldout(clab::TraceReader& trace, std::ostream& out, HeldOutSplit sp
             if (error.code() != clab::ErrorCode::limit) {
                 throw;
             }
-            write_missing(clab::MetricStatus::budget_exceeded);
+            write_missing("budget_exceeded");
         }
     }
     if (!saw_categorical) {
         write_prefix(nullptr, 0);
-        write_missing(clab::MetricStatus::unsupported);
+        write_missing("unsupported");
     }
     checked_flush(out);
 }
@@ -375,7 +408,7 @@ int main(int argc, char** argv) {
             report_temporal(trace, out, {*train, *guard, *test, *sites});
             return 0;
         }
-        if (mode == "--categorical-heldout") {
+        if (mode == "--categorical-heldout" || mode == "--categorical-motif-heldout") {
             if (argc != 6) {
                 return usage();
             }
@@ -387,7 +420,7 @@ int main(int argc, char** argv) {
                 return 2;
             }
             clab::TraceReader trace(argv[5]);
-            report_heldout(trace, out, {*train, *guard, *test});
+            report_heldout(trace, out, {*train, *guard, *test}, mode == "--categorical-motif-heldout");
             return 0;
         }
         if (mode == "--categorical-baselines" || mode == "--categorical-iid" ||

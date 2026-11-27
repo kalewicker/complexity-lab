@@ -1181,6 +1181,32 @@ def check_baseline_comparison(args, directory):
     }
 
 
+def independent_frozen_huffman(fit, observed):
+    counts = Counter(fit)
+    serial = len(counts) + 1
+    queue = [(count, i, (label,)) for i, (label, count) in enumerate(counts.items())]
+    queue.append((1, len(counts), (None,)))
+    heapq.heapify(queue)
+    depths = dict.fromkeys([*counts, None], 0)
+    while len(queue) > 1:
+        left_weight, _, left = heapq.heappop(queue)
+        right_weight, _, right = heapq.heappop(queue)
+        for label in left + right:
+            depths[label] += 1
+        heapq.heappush(queue, (left_weight + right_weight, serial, left + right))
+        serial += 1
+
+    def gamma(n):
+        return 2 * n.bit_length() - 1
+
+    unseen = sum(label not in counts for label in observed)
+    model = gamma(len(counts)) + sum(32 + gamma(n) for n in counts.values())
+    header_bits = gamma(len(observed) + 1)
+    payload = sum(depths[label] if label in counts else 32 + depths[None] for label in observed)
+    raw = header_bits + 32 * len(observed)
+    gain = raw - (header_bits + payload)
+    return model, header_bits, payload, header_bits + payload, raw, unseen, gain, gain - model
+
 def check_categorical_heldout(args, directory):
     train, guard, test = 4, 2, 4
     base = [9, 3, 9, 9]
@@ -1212,32 +1238,6 @@ def check_categorical_heldout(args, directory):
     fields = ("model_bits", "test_header_bits", "test_data_bits", "test_bits", "raw_bits",
               "unseen_symbols", "conditional_gain_bits", "charged_gain_bits")
 
-    def independent(fit, observed):
-        counts = Counter(fit)
-        serial = len(counts) + 1
-        queue = [(count, i, (label,)) for i, (label, count) in enumerate(counts.items())]
-        queue.append((1, len(counts), (None,)))
-        heapq.heapify(queue)
-        depths = dict.fromkeys([*counts, None], 0)
-        while len(queue) > 1:
-            left_weight, _, left = heapq.heappop(queue)
-            right_weight, _, right = heapq.heappop(queue)
-            for label in left + right:
-                depths[label] += 1
-            heapq.heappush(queue, (left_weight + right_weight, serial, left + right))
-            serial += 1
-
-        def gamma(n):
-            return 2 * n.bit_length() - 1
-
-        unseen = sum(label not in counts for label in observed)
-        model = gamma(len(counts)) + sum(32 + gamma(n) for n in counts.values())
-        header_bits = gamma(len(observed) + 1)
-        payload = sum(depths[label] if label in counts else 32 + depths[None] for label in observed)
-        raw = header_bits + 32 * len(observed)
-        gain = raw - (header_bits + payload)
-        return model, header_bits, payload, header_bits + payload, raw, unseen, gain, gain - model
-
     checks = []
     for i, (sample, row) in enumerate(zip(samples, rows)):
         assert row["sequence"] == row["work"] == str(i)
@@ -1251,7 +1251,7 @@ def check_categorical_heldout(args, directory):
             continue
         assert row["status"] == "valid"
         actual = tuple(int(row[key]) for key in fields)
-        assert actual == independent(sample[:train], sample[train+guard:train+guard+test])
+        assert actual == independent_frozen_huffman(sample[:train], sample[train+guard:train+guard+test])
         checks.append(actual)
 
     assert checks[0] == checks[1] == (71, 5, 38, 43, 133, 1, 90, 19)
@@ -1277,6 +1277,86 @@ def check_categorical_heldout(args, directory):
         "short_rows": 1,
         "mixed_gains": checks[0][-2:],
         "shifted_gains": checks[2][-2:],
+    }
+
+
+def check_categorical_motif_heldout(args, directory):
+    pattern = [1, 2, 3, 4, 5, 6]
+    training = [label for i in range(100, 124) for label in pattern + [i]]
+    guard = [800, 801, 802]
+    matched = pattern * 24
+    reordered = pattern[::-1] * 24
+    assert Counter(matched) == Counter(reordered)
+    split = len(training), len(guard), len(matched)
+    base = training + guard + matched
+    samples = [
+        base[:-1], base, training + [900, 901, 902] + matched + [8000],
+        training + guard + reordered, [0xFFFFFFFF - symbol for symbol in base],
+        ([1, 2] * 84) + guard + matched, list(range(168)) + guard + matched,
+    ]
+    trace = directory / "categorical-motif-heldout.cltr"
+
+    def write_samples(observations):
+        chunks = [chunk(1, i, i, i, struct.pack(f"<{len(sample)}I", *sample))
+                  for i, sample in enumerate(observations)]
+        data = (header(META | {"fixed_sites": False}) + b"".join(chunks)
+                + chunk(0, len(chunks), len(chunks) - 1, len(chunks) - 1))
+        trace.write_bytes(data)
+        return data
+
+    mode = "--categorical-motif-heldout"
+    data = write_samples(samples)
+    output = run(args.eval, mode, *split, trace)
+    rows = list(csv.DictReader(io.StringIO(output)))
+    assert len(rows) == len(samples)
+    assert [row["status"] for row in rows] == [
+        "insufficient_data", "valid", "valid", "valid", "valid", "no_training_motif", "no_training_motif",
+    ]
+    motif_fields = ("model_bits", "test_header_bits", "placement_bits", "residual_bits", "test_bits", "occurrences")
+    baseline_fields = ("baseline_model_bits", "baseline_test_bits")
+    gain_fields = ("conditional_gain_bits", "charged_gain_bits")
+    fields = (*motif_fields, *baseline_fields, *gain_fields)
+    for i, (sample, row) in enumerate(zip(samples, rows)):
+        assert None not in row and None not in row.values()
+        assert row["sequence"] == row["work"] == str(i) and row["symbol_count"] == str(len(sample))
+        assert row["code_id"] == "categorical.frozen_motif.v1"
+        assert row["baseline_id"] == "categorical.frozen_huffman.v1"
+        assert tuple(int(row[key]) for key in ("train_symbols", "guard_symbols", "test_symbols")) == split
+        if row["status"] == "insufficient_data":
+            assert not any(row[key] for key in fields)
+            continue
+        baseline = independent_frozen_huffman(sample[:split[0]], sample[split[0]+split[1]:][:split[2]])
+        assert tuple(int(row[key]) for key in baseline_fields) == (baseline[0], baseline[3])
+        if row["status"] == "no_training_motif":
+            assert not any(row[key] for key in (*motif_fields, *gain_fields))
+            continue
+        # gamma(6) plus six u32s pays for the motif once. gamma(145) is the test header.
+        # The matched test starts at offset zero with 24 adjacent matches. All gaps cost a bit.
+        # The reversed period has no match and pays gamma(1) and 144 raw words.
+        bits = (197, 15, 1, 4608, 4624, 0) if i == 3 else (197, 15, 33, 0, 48, 24)
+        conditional = baseline[3] - bits[4]
+        charged = conditional + baseline[0] - bits[0]
+        assert tuple(int(row[key]) for key in fields) == (*bits, baseline[0], baseline[3], conditional, charged)
+
+    assert all(rows[1][key] == rows[2][key] == rows[4][key] for key in fields)
+    assert all(rows[1][key] == rows[3][key] for key in ("model_bits", *baseline_fields))
+    assert all(int(rows[1][key]) > 0 > int(rows[3][key]) for key in gain_fields)
+    write_samples([[3] * 4098])
+    for capped_split in ((4097, 0, 1), (1, 0, 4097)):
+        capped, = csv.DictReader(io.StringIO(run(args.eval, mode, *capped_split, trace)))
+        assert capped["status"] == "budget_exceeded" and not any(capped[key] for key in fields)
+    trace.write_bytes(header() + chunk(2, 0, 0, 0, struct.pack("<3Q", 1, 0, 0)) + chunk(0, 1, 0, 0))
+    unsupported, = csv.DictReader(io.StringIO(run(args.eval, mode, *split, trace)))
+    assert unsupported["status"] == "unsupported" and not unsupported["symbol_count"]
+    assert not any(unsupported[key] for key in fields)
+    assert not run(args.eval, mode, split[0], -1, split[2], trace, code=2)
+    trace.write_bytes(data[:-1])
+    run(args.eval, mode, *split, trace, code=1)
+    return {
+        "trace_sha256": hashlib.sha256(data).hexdigest(),
+        "csv_sha256": hashlib.sha256(output.encode()).hexdigest(),
+        "matched": {key: int(rows[1][key]) for key in fields},
+        "reordered": {key: int(rows[3][key]) for key in fields},
     }
 
 
@@ -1542,6 +1622,7 @@ def check(args, directory):
         "categorical_heldout": check_categorical_heldout(args, directory),
         "categorical_temporal": check_categorical_temporal(args, directory),
         "categorical_motif": check_categorical_motif(args, directory),
+        "categorical_motif_heldout": check_categorical_motif_heldout(args, directory),
     }
     assert result["categorical_sha256"] == "3dda44df0c60342ddd2b6456bbb350ea66a50141d86dc62ba4e887a0000fc9ba"
     assert result["events_sha256"] == "5f5e31d67be90e5eea677c262b01358df9cc2427ff86a17d975c44f4d34ddac1"

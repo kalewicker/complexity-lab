@@ -33,4 +33,4 @@ The [registered protocol](../protocols/E01-categorical-motif.json) uses a separa
 | CLTR fixture | `79359a9ceb334fa98eac15b30765ef2c16473f6fad129a1a51cef350b9cb86c7` |
 | CSV report | `943c6c8a996d6a9bd032bc953df9f5db3c4fbe9ae716698b5149adf009d6e652` |
 
-Run `scripts/check-conformance.sh` to rebuild and verify the installed evaluator. The costs describe in-sample compression under a single-motif search. Held-out dictionary transfer, relational motifs and calibration of a structural metric remain open.
+Run `scripts/check-conformance.sh` to rebuild and verify the installed evaluator. The costs describe in-sample compression under a single-motif search. A separate [frozen motif evaluation](E01-categorical-motif-heldout.md) measures within-snapshot transfer. Relational motifs and calibration of a structural metric remain open.
