@@ -93,6 +93,8 @@ class FrozenCategoricalMotifDictionary {
 public:
     static std::optional<FrozenCategoricalMotifDictionary> fit(std::span<const TypeId> training,
                                                                CodeLimits limits = {});
+    static std::optional<FrozenCategoricalMotifDictionary> fit_frames(std::span<const TypeId> training,
+                                                                      std::size_t sites, CodeLimits limits = {});
     static FrozenCategoricalMotifDictionary from_bytes(std::span<const std::uint8_t> bytes, std::uint64_t bits,
                                                         CodeLimits limits = {});
 

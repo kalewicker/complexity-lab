@@ -35,4 +35,4 @@ The first-order-only control still beat Huffman. Its negative charged gain again
 | CLTR fixture | `151eb33bedc23b189cc2b633649c5050dd931af57dd6b18f1e30d053a734c492` |
 | CSV report | `f44490f9cd7d40de21ed36c5885fd70e1ed8b101f7cc185a83cb3b90d3006767` |
 
-The result covers synthetic within-snapshot transfer. Temporal transfer, null calibration and structural scoring for the two-entry dictionary remain open.
+The result covers synthetic within-snapshot transfer. The [temporal dictionary test](E01-categorical-motif-dictionary-temporal.md) scores later snapshots across a guard window. Null calibration and structural scoring for the two-entry dictionary remain open.

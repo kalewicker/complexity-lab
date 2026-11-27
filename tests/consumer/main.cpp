@@ -122,6 +122,12 @@ int main(int argc, char** argv) {
     if (motif_temporal.status != clab::MetricStatus::insufficient_data || motif_temporal.train_seen != 1) {
         return 1;
     }
+    clab::TraceReader dictionary_temporal_trace(path);
+    const auto dictionary_temporal = clab::score_categorical_motif_dictionary_temporal(
+        dictionary_temporal_trace, {1, 1, 1, 2});
+    if (dictionary_temporal.status != clab::MetricStatus::insufficient_data || dictionary_temporal.train_seen != 1) {
+        return 1;
+    }
     for (auto score : {clab::score_categorical_motif_permutations, clab::score_categorical_motif_site_permutations}) {
         clab::TraceReader permutation_trace(path);
         const auto permutation = score(permutation_trace, {1, 1, 1, 2}, 1, 0, {});

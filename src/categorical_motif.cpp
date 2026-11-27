@@ -59,6 +59,79 @@ OccurrenceTable scan_motifs(std::span<const TypeId> symbols) {
     return occurrences;
 }
 
+struct FrameMatches {
+    std::size_t first{}, count{};
+    std::uint64_t saved{};
+};
+
+using FrameMatchTable = std::map<std::vector<TypeId>, FrameMatches>;
+
+void accumulate_frame_matches(FrameMatchTable& matches, const OccurrenceTable& occurrences,
+                              std::size_t frame_start) {
+    for (const auto& [candidate, hit] : occurrences) {
+        auto& total = matches.try_emplace(candidate, FrameMatches{frame_start + hit.first}).first->second;
+        total.count += hit.count;
+        // The empty placement stream already pays one bit for a zero count.
+        const auto added_placement_bits = gamma_bits(hit.count + 1) - 1 + hit.gap_bits;
+        total.saved += hit.count * candidate.size() * symbol_bits - added_placement_bits;
+    }
+}
+
+struct FrameMotifCandidate {
+    std::vector<TypeId> pattern;
+    std::uint64_t bits;
+};
+
+std::optional<FrameMotifCandidate> best_frame_motif(const FrameMatchTable& matches, std::uint64_t empty_bits,
+                                                    std::span<const TypeId> excluded = {}) {
+    using Order = std::tuple<std::uint64_t, std::size_t, std::size_t>;
+    std::optional<Order> best;
+    const std::vector<TypeId>* pattern = nullptr;
+    for (const auto& [candidate, hit] : matches) {
+        if (hit.count < 2 || std::ranges::equal(candidate, excluded)) {
+            continue;
+        }
+        const auto width = candidate.size();
+        const auto bits = empty_bits - hit.saved + gamma_bits(width) + width * symbol_bits;
+        const Order order{bits, hit.first, width};
+        if (!best || order < *best) {
+            best = order;
+            pattern = &candidate;
+        }
+    }
+    if (!pattern) {
+        return std::nullopt;
+    }
+    return FrameMotifCandidate{*pattern, std::get<0>(*best)};
+}
+
+struct FrameTrainingComparison {
+    std::uint64_t baseline_bits{};
+    std::optional<FrameMotifCandidate> first;
+};
+
+FrameTrainingComparison compare_training_frames(std::span<const TypeId> training, std::size_t sites,
+                                                 CodeLimits limits) {
+    if (!sites || training.empty() || training.size() % sites) {
+        throw Error(ErrorCode::invalid, "frozen motif training requires whole nonempty frames");
+    }
+    check_region(training.size(), limits);
+    FrameTrainingComparison result;
+    FrameMatchTable matches;
+    for (std::size_t start = 0; start < training.size(); start += sites) {
+        const auto frame = training.subspan(start, sites);
+        const auto baseline = compare_categorical(frame, limits);
+        if (!baseline.winner) {
+            throw Error(ErrorCode::limit, "incomplete categorical training baseline set");
+        }
+        result.baseline_bits += baseline.winner->encoded.length.total_bits();
+        accumulate_frame_matches(matches, scan_motifs(frame), start);
+    }
+    const auto empty_frame_bits = gamma_bits(sites + 1) + 1 + sites * symbol_bits;
+    result.first = best_frame_motif(matches, empty_frame_bits * (training.size() / sites));
+    return result;
+}
+
 std::vector<std::size_t> find_placements(std::span<const TypeId> symbols,
                                          std::span<const TypeId> pattern) {
     std::vector<std::size_t> starts;
@@ -419,58 +492,16 @@ std::optional<FrozenCategoricalMotif> FrozenCategoricalMotif::fit(std::span<cons
 
 std::optional<FrozenCategoricalMotif>
 FrozenCategoricalMotif::fit_frames(std::span<const TypeId> training, std::size_t sites, CodeLimits limits) {
-    if (!sites || training.empty() || training.size() % sites) {
-        throw Error(ErrorCode::invalid, "frozen motif training requires whole nonempty frames");
-    }
-    check_region(training.size(), limits);
-    struct TrainingMatches {
-        std::size_t first{}, count{};
-        std::uint64_t saved{};
-    };
-    std::map<std::vector<TypeId>, TrainingMatches> matches;
-    const auto empty_frame_bits = gamma_bits(sites + 1) + 1 + sites * symbol_bits;
-    std::uint64_t baseline_bits = 0;
-    for (std::size_t start = 0; start < training.size(); start += sites) {
-        const auto frame = training.subspan(start, sites);
-        const auto baseline = compare_categorical(frame, limits);
-        if (!baseline.winner) {
-            throw Error(ErrorCode::limit, "incomplete categorical training baseline set");
-        }
-        baseline_bits += baseline.winner->encoded.length.total_bits();
-        for (const auto& [candidate, hit] : scan_motifs(frame)) {
-            const auto width = candidate.size();
-            auto& total = matches.try_emplace(candidate, TrainingMatches{start + hit.first}).first->second;
-            total.count += hit.count;
-            // A zero-match frame already pays one bit for its placement count.
-            const auto added_placement_bits = gamma_bits(hit.count + 1) - 1 + hit.gap_bits;
-            total.saved += hit.count * width * symbol_bits - added_placement_bits;
-        }
-    }
-
-    const auto empty_bits = empty_frame_bits * (training.size() / sites);
-    auto best = std::tuple{baseline_bits, std::size_t{0}, std::size_t{0}};
-    const std::vector<TypeId>* pattern = nullptr;
-    for (const auto& [candidate, hit] : matches) {
-        if (hit.count < 2) {
-            continue;
-        }
-        const auto width = candidate.size();
-        const auto bits = empty_bits - hit.saved + gamma_bits(width) + width * symbol_bits;
-        const auto order = std::tuple{bits, hit.first, width};
-        if (order < best) {
-            best = order;
-            pattern = &candidate;
-        }
-    }
-    if (!pattern) {
+    const auto comparison = compare_training_frames(training, sites, limits);
+    if (!comparison.first || comparison.first->bits >= comparison.baseline_bits) {
         return std::nullopt;
     }
-    FrozenCategoricalMotif fitted(*pattern, limits);
+    FrozenCategoricalMotif fitted(comparison.first->pattern, limits);
     auto encoded_bits = fitted.model_code().length.total_bits();
     for (std::size_t start = 0; start < training.size(); start += sites) {
         encoded_bits += fitted.encode(training.subspan(start, sites), limits).code.length.total_bits();
     }
-    if (encoded_bits != std::get<0>(best)) {
+    if (encoded_bits != comparison.first->bits) {
         throw std::logic_error("frozen motif training cost disagrees with encoded bytes");
     }
     return fitted;
@@ -526,6 +557,39 @@ FrozenCategoricalMotifDictionary::fit(std::span<const TypeId> training, CodeLimi
     }
     const auto& entries = comparison.dictionary->entries;
     return FrozenCategoricalMotifDictionary(entries[0].pattern, entries[1].pattern, limits);
+}
+
+std::optional<FrozenCategoricalMotifDictionary>
+FrozenCategoricalMotifDictionary::fit_frames(std::span<const TypeId> training, std::size_t sites, CodeLimits limits) {
+    const auto comparison = compare_training_frames(training, sites, limits);
+    if (!comparison.first) {
+        return std::nullopt;
+    }
+    const auto& first = *comparison.first;
+    FrameMatchTable matches;
+    for (std::size_t start = 0; start < training.size(); start += sites) {
+        const auto frame = training.subspan(start, sites);
+        const auto covered = find_placements(frame, first.pattern);
+        OccurrenceTable remaining;
+        visit_uncovered(frame, covered, first.pattern.size(), [&](std::size_t offset, std::span<const TypeId> region) {
+            scan_motif_region(remaining, region, offset);
+        });
+        accumulate_frame_matches(matches, remaining, start);
+    }
+    const auto empty_second_bits = first.bits + training.size() / sites;
+    const auto second = best_frame_motif(matches, empty_second_bits, first.pattern);
+    if (!second || second->bits >= std::min(first.bits, comparison.baseline_bits)) {
+        return std::nullopt;
+    }
+    FrozenCategoricalMotifDictionary fitted(first.pattern, second->pattern, limits);
+    auto encoded_bits = fitted.model_code().length.total_bits();
+    for (std::size_t start = 0; start < training.size(); start += sites) {
+        encoded_bits += fitted.encode(training.subspan(start, sites), limits).encoded.length.total_bits();
+    }
+    if (encoded_bits != second->bits) {
+        throw std::logic_error("frozen motif dictionary training cost disagrees with encoded bytes");
+    }
+    return fitted;
 }
 
 FrozenCategoricalMotifDictionary FrozenCategoricalMotifDictionary::from_bytes(

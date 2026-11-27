@@ -1,0 +1,8 @@
+{
+  "protocol": "E01-categorical-motif-dictionary-temporal-v1",
+  "scope": "an ordered two-entry categorical dictionary fitted on earlier fixed-site snapshots and scored on later snapshots",
+  "fit": "choose the best first pattern using frame-local placements; keep its placements while searching uncovered intervals for a second pattern; require two occurrences per definition across training and strict training gain over both the first-entry code and the sum of best five-family frame baselines",
+  "test": "freeze both definitions, retain first-entry placement priority and score each prefix separately; compare with the first entry alone and Huffman trained on the same prefixes; charge each model once",
+  "controls": "compare matched test windows with an equal-histogram window using only the first ordering; check guard, unused site, and tail isolation, deterministic exact costs, and frame boundaries",
+  "limits": "at most 4096 symbols in each aggregate window, synthetic temporal transfer fixtures only"
+}

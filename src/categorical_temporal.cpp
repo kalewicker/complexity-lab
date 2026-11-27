@@ -284,6 +284,45 @@ TemporalCategoricalMotifResult score_categorical_motif_temporal(IObservationSour
     return score_motif_window(source, split, limits);
 }
 
+TemporalCategoricalDictionaryResult score_categorical_motif_dictionary_temporal(
+    IObservationSource& source, TemporalCategoricalSplit split, CodeLimits limits) {
+    std::optional<FrozenCategoricalModel> baseline;
+    std::optional<FrozenCategoricalMotifDictionary> model;
+    auto result = score_temporal<TemporalCategoricalDictionaryResult>(
+        source, split, limits, std::min(limits.symbols, categorical_iid_symbol_limit),
+        [&](std::span<const TypeId> training, TemporalCategoricalDictionaryCosts& costs) {
+            baseline.emplace(FrozenCategoricalModel::fit(training, limits));
+            costs.baseline_model = baseline->model_code();
+            model = FrozenCategoricalMotifDictionary::fit_frames(training, split.sites, limits);
+            if (model) {
+                auto& dictionary = costs.dictionary.emplace();
+                dictionary.model = model->model_code();
+                dictionary.first_model = model->first_entry().model_code();
+            }
+        },
+        [&](std::span<const TypeId> test, TemporalCategoricalDictionaryCosts& costs) {
+            const auto encoded = baseline->encode(test, limits);
+            costs.baseline_test_bits = checked_add(costs.baseline_test_bits, encoded.code.length.total_bits());
+            if (!model) {
+                return;
+            }
+            auto& sums = *costs.dictionary;
+            const auto pair = model->encode(test, limits);
+            const auto first = model->first_entry().encode(test, limits);
+            sums.test.header_bits = checked_add(sums.test.header_bits, pair.encoded.length.header_bits);
+            sums.test.data_bits = checked_add(sums.test.data_bits, pair.encoded.length.data_bits);
+            sums.placement_bits = checked_add(sums.placement_bits, pair.placement_bits);
+            sums.first_test_bits = checked_add(sums.first_test_bits, first.code.length.total_bits());
+            for (std::size_t i = 0; i < pair.entries.size(); ++i) {
+                sums.occurrences[i] = checked_add(sums.occurrences[i], pair.entries[i].placements.size());
+            }
+        });
+    if (result.costs && !result.costs->dictionary) {
+        result.reason = "no_training_dictionary";
+    }
+    return result;
+}
+
 TemporalMotifPermutationResult score_categorical_motif_permutations(IObservationSource& source,
                                                                      TemporalCategoricalSplit split,
                                                                      std::size_t count, std::uint64_t seed,

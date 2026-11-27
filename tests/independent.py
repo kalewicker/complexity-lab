@@ -1592,6 +1592,98 @@ def check_categorical_motif_temporal(args, directory):
     }
 
 
+def check_categorical_dictionary_temporal(args, directory):
+    trace = directory / "categorical-motif-dictionary-temporal.cltr"
+    mode = "--categorical-motif-dictionary-temporal"
+    split = (2, 1, 2, 84)
+    a, b = [1, 2, 3, 4, 5, 6], [1, 3, 5, 2, 4, 6]
+    training = [[x for i in range(start, start+12) for x in (a if i % 2 == 0 else b) + [i]]
+                for start in (100, 112)]
+    matched, first_only = (a + b) * 7, a * 14
+    assert Counter(matched) == Counter(first_only)
+    frames = [*training, [7] * 84, matched, matched, [8] * 84]
+    frames = [frame + [900+i] for i, frame in enumerate(frames)]
+    data = write_temporal_steps(trace, frames)
+    output = run(args.eval, mode, *split, trace)
+    row, = csv.DictReader(io.StringIO(output))
+    assert row["status"] == "valid" and not row["reason"]
+    assert row["code_id"] == "categorical.frozen_two_motif.v1"
+    assert row["baseline_id"] == "categorical.frozen_huffman.v1"
+    assert tuple(int(row[key]) for key in ("train_seen", "guard_seen", "test_seen")) == split[:3]
+    assert [row[f"{anchor}_{field}"] for anchor in ("train_end", "test_start", "test_end")
+            for field in ("sequence", "work", "time")] == ["2", "2", "1", "5", "5", "3", "6", "6", "4"]
+    baseline_fields = ("baseline_model_bits", "baseline_test_bits")
+    fields = ("model_bits", "test_header_bits", "placement_bits", "residual_bits", "test_bits",
+              "first_occurrences", "second_occurrences", "first_model_bits", "first_test_bits",
+              *baseline_fields, "conditional_gain_vs_first_bits", "charged_gain_vs_first_bits",
+              "conditional_gain_vs_baseline_bits", "charged_gain_vs_baseline_bits")
+
+    def check_costs(actual, tests, pair_placements, occurrences, first_test):
+        assert None not in actual and None not in actual.values()
+        reference = [independent_frozen_huffman(training[0] + training[1], frame) for frame in tests]
+        baseline_model, baseline_test = reference[0][0], sum(item[3] for item in reference)
+        pair_test = 26 + pair_placements
+        first_gain, baseline_gain = first_test - pair_test, baseline_test - pair_test
+        expected = (394, 26, pair_placements, 0, pair_test, *occurrences, 197, first_test,
+                    baseline_model, baseline_test, first_gain, first_gain - 197,
+                    baseline_gain, baseline_gain + baseline_model - 394)
+        assert tuple(int(actual[key]) for key in fields) == expected
+
+    # Each 84-symbol test pays gamma(85)=13. The two placement streams cost 38 and 42 bits per matched frame.
+    check_costs(row, [matched, matched], 160, (14, 14), 2790)
+    single, = csv.DictReader(io.StringIO(run(args.eval, "--categorical-motif-temporal", *split, trace)))
+    assert single["reason"] == "no_training_motif"
+
+    def evaluate(sizes=split):
+        observed, = csv.DictReader(io.StringIO(run(args.eval, mode, *sizes, trace)))
+        return observed
+
+    changed = [frame[:84] + [1000+i] for i, frame in enumerate(frames)]
+    changed[2] = [4] * 85
+    changed[-1] = [5] * 85
+    write_temporal_steps(trace, changed)
+    assert evaluate() == row
+    changed[3] = changed[4] = first_only + [888]
+    write_temporal_steps(trace, changed)
+    control = evaluate()
+    # All first matches cost gamma(15)+14=21, plus one zero-count bit for the second entry in each frame.
+    check_costs(control, [first_only, first_only], 44, (28, 0), 68)
+    assert int(row["charged_gain_vs_first_bits"]) > 0 > int(control["charged_gain_vs_first_bits"])
+    assert all(row[key] == control[key] for key in ("model_bits", "first_model_bits", *baseline_fields))
+
+    write_temporal_steps(trace, [[7] * 85, [7] * 85, *frames[2:]])
+    absent = evaluate()
+    assert None not in absent and None not in absent.values()
+    assert (absent["status"], absent["reason"]) == ("valid", "no_training_dictionary")
+    assert all(absent[key] for key in baseline_fields)
+    assert not any(absent[key] for key in fields if key not in baseline_fields)
+
+    def missing(status, reason, sizes=split):
+        actual = evaluate(sizes)
+        assert None not in actual and None not in actual.values()
+        assert (actual["status"], actual["reason"]) == (status, reason)
+        assert not any(actual[key] for key in fields)
+
+    write_temporal_steps(trace, frames[:4])
+    missing("insufficient_data", "too_few_snapshots")
+    write_temporal_steps(trace, frames, [0, 1, 1, 3, 4, 5])
+    missing("insufficient_data", "nonincreasing_time")
+    write_temporal_steps(trace, frames, fixed=False)
+    missing("unsupported", "fixed_sites_required")
+    write_temporal_steps(trace, [[0] * 2049] * 4)
+    missing("budget_exceeded", "code_limit", (1, 1, 2, 2049))
+    write_temporal_steps(trace, frames[:-1] + [[0]])
+    assert not run(args.eval, mode, *split, trace, code=1)
+    trace.write_bytes(data[:-1])
+    assert not run(args.eval, mode, *split, trace, code=1)
+    return {
+        "trace_sha256": hashlib.sha256(data).hexdigest(),
+        "csv_sha256": hashlib.sha256(output.encode()).hexdigest(),
+        "matched": {key: int(row[key]) for key in fields},
+        "first_only": {key: int(control[key]) for key in fields},
+    }
+
+
 def splitmix64_words(seed):
     mask = (1 << 64) - 1
     state = seed
@@ -2221,6 +2313,7 @@ def check(args, directory):
         "categorical_motif_heldout": check_categorical_motif_heldout(args, directory),
         "categorical_dictionary_heldout": check_categorical_dictionary_heldout(args, directory),
         "categorical_motif_temporal": check_categorical_motif_temporal(args, directory),
+        "categorical_dictionary_temporal": check_categorical_dictionary_temporal(args, directory),
         "categorical_motif_permutation": check_categorical_motif_permutation(args, directory),
         "categorical_motif_site_permutation": check_categorical_motif_site_permutation(args, directory),
         "motif_calibration_runner": check_motif_calibration_runner(args, directory),

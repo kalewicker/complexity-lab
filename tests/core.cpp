@@ -929,6 +929,34 @@ void temporal_categorical_fixtures(const std::filesystem::path& directory) {
             "temporal run without an admitted motif must report the frozen comparator");
 }
 
+void temporal_dictionary_fixtures(const std::filesystem::path& directory) {
+    using Frame = std::array<clab::TypeId, 6>;
+    const Frame first{1, 2, 3, 4, 5, 6}, second{1, 3, 5, 2, 4, 6};
+    const auto path = directory / "dictionary-temporal-boundary.cltr";
+    clab::TraceWriter writer(path, {"dictionary-boundary", "fixture", "step", true, true});
+    // The second pattern exists only across the two test frames when they are flattened.
+    const std::array frames{first, first, second, second, Frame{9, 9, 9, 9, 9, 9},
+                            Frame{11, 11, 11, 1, 3, 5}, Frame{2, 4, 6, 22, 22, 22}};
+    for (std::size_t i = 0; i < frames.size(); ++i) {
+        writer.append({{i, double(i), i}, clab::Snapshot(frames[i])});
+    }
+    writer.finish();
+    clab::TraceReader trace(path);
+    const auto result = clab::score_categorical_motif_dictionary_temporal(trace, {4, 1, 2, 6});
+    require(result.status == clab::MetricStatus::valid && result.costs && result.costs->dictionary,
+            "temporal dictionary admits across-frame training support");
+    const auto& pair = *result.costs->dictionary;
+    const auto restored = clab::FrozenCategoricalMotifDictionary::from_bytes(
+        pair.model.bytes, pair.model.length.total_bits());
+    require(restored.encode(first).entries[0].placements.size() == 1 &&
+            restored.encode(second).entries[1].placements.size() == 1,
+            "temporal dictionary restores in fixed training order");
+    require(pair.occurrences == std::array<std::uint64_t, 2>{0, 0} &&
+            pair.test == clab::CodeLength{10, 0, 388} && pair.placement_bits == 4 &&
+            pair.first_test_bits == 396 && trace.status() == clab::TraceStatus::complete,
+            "temporal dictionary must keep placements inside individual test frames");
+}
+
 void temporal_permutation_budget(const std::filesystem::path& directory) {
     const auto path = directory / "permutation-budget.cltr";
     std::array<clab::TypeId, 64> labels{};
@@ -999,6 +1027,7 @@ int main() {
         frozen_motif_fixtures();
         categorical_heldout_fixtures();
         temporal_categorical_fixtures(temp.path);
+        temporal_dictionary_fixtures(temp.path);
         temporal_permutation_budget(temp.path);
 #ifdef CLAB_TEST_SUBSTRATES
         replay();

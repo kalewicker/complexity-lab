@@ -53,6 +53,32 @@ struct TemporalCategoricalMotifResult {
 score_categorical_motif_temporal(IObservationSource& source, TemporalCategoricalSplit split,
                                  CodeLimits limits = {});
 
+struct TemporalMotifDictionaryCosts {
+    EncodedCategorical model, first_model;
+    CodeLength test;
+    std::uint64_t placement_bits{}, first_test_bits{};
+    std::array<std::uint64_t, 2> occurrences{};
+};
+
+struct TemporalCategoricalDictionaryCosts {
+    EncodedCategorical baseline_model;
+    std::uint64_t baseline_test_bits{};
+    // A completed split can retain Huffman costs even when training admits no pair.
+    std::optional<TemporalMotifDictionaryCosts> dictionary;
+};
+
+struct TemporalCategoricalDictionaryResult {
+    MetricStatus status{MetricStatus::unsupported};
+    std::string_view reason;
+    std::size_t train_seen{}, guard_seen{}, test_seen{};
+    std::optional<Stamp> train_end, test_start, test_end;
+    std::optional<TemporalCategoricalDictionaryCosts> costs;
+};
+
+[[nodiscard]] TemporalCategoricalDictionaryResult
+score_categorical_motif_dictionary_temporal(IObservationSource& source, TemporalCategoricalSplit split,
+                                            CodeLimits limits = {});
+
 inline constexpr std::size_t temporal_motif_permutation_limit = 199;
 inline constexpr std::string_view temporal_motif_permutation_id = "categorical.frame_permutation.v1";
 inline constexpr std::string_view temporal_motif_site_permutation_id = "categorical.shared_site_permutation.v1";

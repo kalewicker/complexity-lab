@@ -28,4 +28,4 @@ For the second input, the dictionary charged 18 header bits, 394 definition bits
 | CLTR fixture | `4a56adb4fb4a3d9df9b68db3e631ca574fff8064d909f2d6ad324b6785066323` |
 | CSV report | `404facb542e7733cc87e5276a657e38d98102ccfb7888dae206bf402367d66e1` |
 
-These fixtures establish in-sample accounting for one additional motif definition. The [frozen two-entry test](E01-categorical-motif-dictionary-heldout.md) measures its cost on a disjoint region. Temporal transfer, null calibration, and structural scoring remain open.
+These fixtures establish in-sample accounting for one additional motif definition. The [frozen two-entry tests](E01-categorical-motif-dictionary-heldout.md) measure cost on disjoint regions and [later snapshots](E01-categorical-motif-dictionary-temporal.md). Null calibration and structural scoring remain open.

@@ -50,6 +50,7 @@ int usage() {
               << "       clab-eval --categorical-motif-dictionary TRACE.cltr\n"
               << "       clab-eval --categorical-motif-heldout TRAIN GUARD TEST TRACE.cltr\n"
               << "       clab-eval --categorical-motif-dictionary-heldout TRAIN GUARD TEST TRACE.cltr\n"
+              << "       clab-eval --categorical-motif-dictionary-temporal TRAIN GUARD TEST SITES TRACE.cltr\n"
               << "       clab-eval --categorical-heldout TRAIN GUARD TEST TRACE.cltr\n"
               << "       clab-eval --categorical-motif-temporal TRAIN GUARD TEST SITES TRACE.cltr\n"
               << "       clab-eval --categorical-motif-permutation TRAIN GUARD TEST SITES DRAWS SEED TRACE.cltr\n"
@@ -302,43 +303,61 @@ struct HeldOutSplit {
 
 enum class HeldOutModel { huffman, motif, dictionary };
 
+constexpr std::string_view dictionary_cost_columns =
+    "baseline_id,model_bits,test_header_bits,placement_bits,residual_bits,test_bits,"
+    "first_occurrences,second_occurrences,first_model_bits,first_test_bits,baseline_model_bits,"
+    "baseline_test_bits,conditional_gain_vs_first_bits,charged_gain_vs_first_bits,"
+    "conditional_gain_vs_baseline_bits,charged_gain_vs_baseline_bits";
+
+struct ModelAndTestBits {
+    std::uint64_t model, test;
+};
+
+void write_dictionary_costs(std::ostream& out, const clab::CodeLength& test, std::uint64_t model_bits,
+                            std::uint64_t placement_bits, std::array<std::uint64_t, 2> occurrences,
+                            ModelAndTestBits first, ModelAndTestBits baseline) {
+    const auto pair_test = test.total_bits();
+    const auto gain = [pair_test](ModelAndTestBits other) {
+        return static_cast<std::int64_t>(other.test) - static_cast<std::int64_t>(pair_test);
+    };
+    const auto charged = [model_bits, &gain](ModelAndTestBits other) {
+        return gain(other) + static_cast<std::int64_t>(other.model) - static_cast<std::int64_t>(model_bits);
+    };
+    out << model_bits << ',' << test.header_bits << ',' << placement_bits << ','
+        << test.data_bits - placement_bits << ',' << pair_test << ',' << occurrences[0] << ',' << occurrences[1]
+        << ',' << first.model << ',' << first.test << ',' << baseline.model << ',' << baseline.test
+        << ',' << gain(first) << ',' << charged(first) << ',' << gain(baseline) << ',' << charged(baseline);
+}
+
+void write_dictionary_baseline_only(std::ostream& out, ModelAndTestBits baseline) {
+    out << ",,,,,,,,," << baseline.model << ',' << baseline.test << ",,,,";
+}
+
 void write_dictionary_heldout(std::ostream& out, std::span<const clab::TypeId> training,
                                std::span<const clab::TypeId> test, std::uint64_t baseline_model,
                                std::uint64_t baseline_test) {
     const auto dictionary = clab::FrozenCategoricalMotifDictionary::fit(training);
     if (!dictionary) {
-        out << ",,,,,,,,," << baseline_model << ',' << baseline_test << ",,,,,no_training_dictionary\n";
+        write_dictionary_baseline_only(out, {baseline_model, baseline_test});
+        out << ",no_training_dictionary\n";
         return;
     }
     const auto pair_frame = dictionary->encode(test);
     const auto first_frame = dictionary->first_entry().encode(test);
-    const auto& length = pair_frame.encoded.length;
-    const auto model_bits = dictionary->model_code().length.total_bits();
-    const auto first_model = dictionary->first_entry().model_code().length.total_bits();
-    const auto first_test = first_frame.code.length.total_bits();
-    const auto pair_test = length.total_bits();
-    const auto gain = [pair_test](std::uint64_t other_test) {
-        return static_cast<std::int64_t>(other_test) - static_cast<std::int64_t>(pair_test);
-    };
-    const auto charged = [model_bits, &gain](std::uint64_t other_model, std::uint64_t other_test) {
-        return gain(other_test) + static_cast<std::int64_t>(other_model) - static_cast<std::int64_t>(model_bits);
-    };
-    out << model_bits << ',' << length.header_bits << ',' << pair_frame.placement_bits << ','
-        << length.data_bits - pair_frame.placement_bits << ',' << pair_test << ','
-        << pair_frame.entries[0].placements.size() << ',' << pair_frame.entries[1].placements.size() << ','
-        << first_model << ',' << first_test << ',' << baseline_model << ',' << baseline_test << ','
-        << gain(first_test) << ',' << charged(first_model, first_test) << ','
-        << gain(baseline_test) << ',' << charged(baseline_model, baseline_test) << ",valid\n";
+    write_dictionary_costs(out, pair_frame.encoded.length, dictionary->model_code().length.total_bits(),
+                           pair_frame.placement_bits,
+                           {pair_frame.entries[0].placements.size(), pair_frame.entries[1].placements.size()},
+                           {dictionary->first_entry().model_code().length.total_bits(),
+                            first_frame.code.length.total_bits()},
+                           {baseline_model, baseline_test});
+    out << ",valid\n";
 }
 
 void report_heldout(clab::TraceReader& trace, std::ostream& out, HeldOutSplit split, HeldOutModel model) {
     out.imbue(std::locale::classic());
     out << "run_id,sequence,work,encoding,exact,symbol_count,train_symbols,guard_symbols,test_symbols,code_id,";
     if (model == HeldOutModel::dictionary) {
-        out << "baseline_id,model_bits,test_header_bits,placement_bits,residual_bits,test_bits,"
-               "first_occurrences,second_occurrences,first_model_bits,first_test_bits,baseline_model_bits,"
-               "baseline_test_bits,conditional_gain_vs_first_bits,charged_gain_vs_first_bits,"
-               "conditional_gain_vs_baseline_bits,charged_gain_vs_baseline_bits,status\n";
+        out << dictionary_cost_columns << ",status\n";
     } else if (model == HeldOutModel::motif) {
         out << "baseline_id,model_bits,test_header_bits,placement_bits,residual_bits,test_bits,occurrences,"
                "baseline_model_bits,baseline_test_bits,conditional_gain_bits,charged_gain_bits,status\n";
@@ -492,6 +511,27 @@ void report_temporal(clab::TraceReader& trace, std::ostream& out, clab::Temporal
     checked_flush(out);
 }
 
+void report_dictionary_temporal(clab::TraceReader& trace, std::ostream& out, clab::TemporalCategoricalSplit split) {
+    const auto result = clab::score_categorical_motif_dictionary_temporal(trace, split);
+    write_temporal_prefix(out, trace.metadata(), split, result, clab::categorical_frozen_dictionary_code_id,
+                          dictionary_cost_columns);
+    out << ',' << clab::categorical_frozen_code_id << ',';
+    if (const auto& costs = result.costs) {
+        const ModelAndTestBits baseline{costs->baseline_model.length.total_bits(), costs->baseline_test_bits};
+        if (const auto& pair = costs->dictionary) {
+            write_dictionary_costs(out, pair->test, pair->model.length.total_bits(), pair->placement_bits,
+                                   pair->occurrences, {pair->first_model.length.total_bits(), pair->first_test_bits},
+                                   baseline);
+        } else {
+            write_dictionary_baseline_only(out, baseline);
+        }
+    } else {
+        out << ",,,,,,,,,,,,,,";
+    }
+    out << ',' << status_name(result.status) << ',' << result.reason << '\n';
+    checked_flush(out);
+}
+
 struct PermutationOptions {
     std::size_t count;
     std::uint64_t seed;
@@ -592,7 +632,9 @@ int main(int argc, char** argv) {
         }
         const bool shared_site_permutation = mode == "--categorical-motif-site-permutation";
         const bool permutation = shared_site_permutation || mode == "--categorical-motif-permutation";
-        if (mode == "--categorical-temporal" || mode == "--categorical-motif-temporal" || permutation) {
+        const bool dictionary_temporal = mode == "--categorical-motif-dictionary-temporal";
+        if (mode == "--categorical-temporal" || mode == "--categorical-motif-temporal" ||
+            dictionary_temporal || permutation) {
             if (argc != (permutation ? 9 : 7)) {
                 return usage();
             }
@@ -614,7 +656,9 @@ int main(int argc, char** argv) {
             }
             clab::TraceReader trace(argv[permutation ? 8 : 6]);
             const clab::TemporalCategoricalSplit split{*train, *guard, *test, *sites};
-            if (mode != "--categorical-temporal") {
+            if (dictionary_temporal) {
+                report_dictionary_temporal(trace, out, split);
+            } else if (mode != "--categorical-temporal") {
                 report_motif_temporal(trace, out, split, options);
             } else {
                 report_temporal(trace, out, split);
