@@ -24,4 +24,4 @@ A second trace kept two labels at fixed sites while changing the four other scor
 | Changing CLTR | `110cdb85ee68832f1ecea52e1349558636e37f14d418b7c8d1178639b7582ee2` |
 | Changing CSV | `de0f845ac094ccf809c0396ebeea80c8235684c2152414bf2f9576cad88cab02` |
 
-The [shared-site calibration design](E01-categorical-motif-site-calibration.md) fixes the populations and criteria for measuring false positives and sensitivity. The population panel remains unstarted.
+The [registered shared-site calibration results](E01-categorical-motif-site-calibration.md#registered-panel-results) give false-positive and sensitivity bounds for one synthetic layout with persistent site histories.

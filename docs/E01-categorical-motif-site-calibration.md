@@ -38,4 +38,19 @@ The generator uses the same SHA-256 stream and per-role seed derivation as the i
 
 The two null smoke worlds ranked 2/100 and 58/100. Both planted smoke worlds ranked 2/100. The first null smoke outcome was a rejection. The smoke distributions check execution and accounting with four separately seeded worlds. Population rates will use the fixed 700-world roster.
 
-Independent checks decoded the raw smoke frames, confirmed the four persistent and eight varying histories, verified the planted block, checked disjoint seed namespaces, and exercised an empty full roster. The audit reproduced the existing independent-frame archive exactly. The shared-site population panel remains unstarted.
+Independent checks decoded the raw smoke frames, confirmed the four persistent and eight varying histories, verified the planted block, checked disjoint seed namespaces, and exercised an empty full roster. The audit reproduced the existing independent-frame archive exactly. These checks preceded the registered execution.
+
+## Registered panel results
+
+The panel ran once from registration commit `31c45b418b8067a96696ec818edbfa9226f67b4e` using the macOS arm64 release evaluator. All 700 planned worlds and 69,300 shared-site permutations completed. There were zero unresolved and zero unstarted worlds.
+
+| Stratum | Rejected | Observed rate | Registered confidence bound | Result |
+|---|---:|---:|---|---|
+| Exchangeable null | 9 / 350 | 2.57% | False-positive upper bound 4.8251% | Pass |
+| Planted order | 342 / 350 | 97.71% | Sensitivity lower bound 95.5460% | Pass |
+
+Training admitted no motif in 88 null worlds. Each remained in the denominator with rank 100/100. Training admitted a motif in every planted world. The eight misses had ranks of 6/100 in seven cases and 7/100 in one case, all above the fixed 5/100 cutoff.
+
+The read-only audit reproduced the complete report byte for byte. A separate calculation checked the roster and seed derivation, decoded every frame, verified the persistent histories and planted blocks, recomputed the ranks from the recorded draw gains, and checked the exact binomial decisions and outward rounding. The [per-world ledger](evidence/E01-categorical-motif-site-calibration-v1-worlds.csv) records the input and receipt digests. The [machine-readable summary](evidence/E01-categorical-motif-site-calibration-v1-summary.json) records the rank distributions and the manifest, evaluator, and report digests. The raw traces and receipts are archived locally at `build/categorical-motif-site-calibration-v1`.
+
+Both criteria passed for the registered synthetic site histories, planted block, and observation budget. Other layouts, scales, site-exchangeability assumptions, and structural complexity scoring remain open.
