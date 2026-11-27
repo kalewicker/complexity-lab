@@ -1,10 +1,13 @@
 #include <clab/categorical_code.hpp>
+#include <clab/categorical_heldout.hpp>
 #include <clab/evaluator.hpp>
 #include <clab/histogram_cache.hpp>
 #include <clab/trace.hpp>
 
+#include <charconv>
 #include <iomanip>
 #include <iostream>
+#include <limits>
 #include <locale>
 #include <optional>
 #include <string_view>
@@ -38,7 +41,8 @@ int usage() {
               << "       clab-eval --plan-metrics [--metric ID]...\n"
               << "       clab-eval --categorical-baselines TRACE.cltr\n"
               << "       clab-eval --categorical-iid TRACE.cltr\n"
-              << "       clab-eval --categorical-compare TRACE.cltr\n";
+              << "       clab-eval --categorical-compare TRACE.cltr\n"
+              << "       clab-eval --categorical-heldout TRAIN GUARD TEST TRACE.cltr\n";
     return 2;
 }
 
@@ -148,12 +152,110 @@ void report_categorical_baselines(clab::TraceReader& trace, std::ostream& out, C
     }
     checked_flush(out);
 }
+
+std::optional<std::size_t> parse_size(std::string_view input) {
+    std::size_t size{};
+    const auto end = input.data() + input.size();
+    const auto parsed = std::from_chars(input.data(), end, size);
+    if (parsed.ec != std::errc{} || parsed.ptr != end) {
+        return std::nullopt;
+    }
+    return size;
+}
+
+struct HeldOutSplit {
+    std::size_t training, guard, test;
+};
+
+void report_heldout(clab::TraceReader& trace, std::ostream& out, HeldOutSplit split) {
+    out.imbue(std::locale::classic());
+    out << "run_id,sequence,work,encoding,exact,symbol_count,train_symbols,guard_symbols,test_symbols,"
+           "code_id,model_bits,test_header_bits,test_data_bits,test_bits,raw_bits,unseen_symbols,"
+           "conditional_gain_bits,charged_gain_bits,status\n";
+    const auto minimum = clab::checked_add(clab::checked_add(split.training, split.guard), split.test);
+    bool saw_categorical = false;
+    const auto write_prefix = [&](const clab::ObservationRecord* record, std::size_t count) {
+        const auto& meta = trace.metadata();
+        csv_text(out, meta.run_id);
+        out << ',';
+        if (record) {
+            out << record->stamp.sequence << ',' << record->stamp.work;
+        } else {
+            out << ',';
+        }
+        out << ',';
+        csv_text(out, meta.encoding);
+        out << ',' << (meta.exact ? "true" : "false") << ',';
+        if (record) {
+            out << count;
+        }
+        out << ',' << split.training << ',' << split.guard << ',' << split.test << ','
+            << clab::categorical_frozen_code_id << ',';
+    };
+    const auto write_missing = [&](clab::MetricStatus status) {
+        out << ",,,,,,,," << status_name(status) << '\n';
+    };
+    while (const auto record = trace.next()) {
+        const auto* snapshot = std::get_if<clab::Snapshot>(&record->payload);
+        if (!snapshot) {
+            continue;
+        }
+        saw_categorical = true;
+        const auto symbols = snapshot->symbols();
+        write_prefix(&*record, symbols.size());
+        if (symbols.size() < minimum) {
+            write_missing(clab::MetricStatus::insufficient_data);
+            continue;
+        }
+        try {
+            const auto fitted = clab::FrozenCategoricalModel::fit(symbols.first(split.training));
+            const auto test = symbols.subspan(split.training + split.guard, split.test);
+            const auto encoded = fitted.encode(test);
+            const auto model_bits = fitted.model_code().length.total_bits();
+            const auto test_bits = encoded.code.length.total_bits();
+            // The raw comparator uses the same length frame and external family choice.
+            const auto raw_bits = clab::checked_add(encoded.code.length.header_bits,
+                                                    clab::checked_multiply(test.size(), 32));
+            const auto conditional_gain = static_cast<std::int64_t>(raw_bits) - static_cast<std::int64_t>(test_bits);
+            const auto charged_gain = conditional_gain - static_cast<std::int64_t>(model_bits);
+            out << model_bits << ',' << encoded.code.length.header_bits << ','
+                << encoded.code.length.data_bits << ',' << test_bits << ',' << raw_bits << ','
+                << encoded.unseen_symbols << ',' << conditional_gain << ',' << charged_gain << ",valid\n";
+        } catch (const clab::Error& error) {
+            if (error.code() != clab::ErrorCode::limit) {
+                throw;
+            }
+            write_missing(clab::MetricStatus::budget_exceeded);
+        }
+    }
+    if (!saw_categorical) {
+        write_prefix(nullptr, 0);
+        write_missing(clab::MetricStatus::unsupported);
+    }
+    checked_flush(out);
+}
+
 }
 
 int main(int argc, char** argv) {
     try {
         auto& out = std::cout;
         const auto mode = argc > 1 ? std::string_view(argv[1]) : std::string_view{};
+        if (mode == "--categorical-heldout") {
+            if (argc != 6) {
+                return usage();
+            }
+            const auto train = parse_size(argv[2]), guard = parse_size(argv[3]), test = parse_size(argv[4]);
+            if (!train || !guard || !test || *train == 0 || *test == 0 ||
+                *guard > std::numeric_limits<std::size_t>::max() - *train ||
+                *test > std::numeric_limits<std::size_t>::max() - (*train + *guard)) {
+                std::cerr << "clab-eval: invalid categorical region sizes\n";
+                return 2;
+            }
+            clab::TraceReader trace(argv[5]);
+            report_heldout(trace, out, {*train, *guard, *test});
+            return 0;
+        }
         if (mode == "--categorical-baselines" || mode == "--categorical-iid" ||
             mode == "--categorical-compare") {
             if (argc != 3) {

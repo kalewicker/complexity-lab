@@ -1,0 +1,12 @@
+{
+  "protocol": "E01-heldout-categorical-v1",
+  "scope": "frozen histogram-fitted prefix code and a raw reference on disjoint categorical regions of one snapshot",
+  "checks": {
+    "split": "explicit train/guard/test sizes select contiguous disjoint regions; changing guard and ignored tail symbols has no effect; short snapshots produce insufficient_data",
+    "frozen_model": "fit from training only with deterministic ties; preserve model bytes across differing held-out inputs; account for a fixed escape and raw labels for all unseen categories",
+    "exactness": "independent bitstring and heap references verify model, conditional and raw lengths; decode held-out bytes using only the serialized model",
+    "controls": "exercise matched and shifted distributions, relabeling including tied counts, malformed payloads, budget limits and later valid rows",
+    "install": "preserve prior CLI outputs and run the full conformance matrix"
+  },
+  "limits": "one training region and one validation region per snapshot, with a frozen frequency-fitted prefix code. No temporal independence assumption, model selection, structural gain or scientific calibration."
+}

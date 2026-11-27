@@ -1,4 +1,5 @@
 #include <clab/categorical_code.hpp>
+#include <clab/categorical_heldout.hpp>
 #include <clab/evaluator.hpp>
 #include <clab/histogram_cache.hpp>
 #include <clab/trace.hpp>
@@ -34,6 +35,13 @@ int main(int argc, char** argv) {
     if (!comparison.winner ||
         !std::ranges::equal(clab::decode_selected_categorical(
             comparison.winner->encoded.bytes, comparison.winner->encoded.length.total_bits()), witness)) {
+        return 1;
+    }
+    const auto fitted = clab::FrozenCategoricalModel::fit(witness);
+    const auto& model = fitted.model_code();
+    const auto restored = clab::FrozenCategoricalModel::from_bytes(model.bytes, model.length.total_bits());
+    const auto heldout = fitted.encode(witness);
+    if (!std::ranges::equal(restored.decode(heldout.code.bytes, heldout.code.length.total_bits()), witness)) {
         return 1;
     }
     const std::filesystem::path path(argv[1]);

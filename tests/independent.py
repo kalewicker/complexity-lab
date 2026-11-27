@@ -5,6 +5,7 @@ from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
 import hashlib
+import heapq
 import io
 from itertools import groupby
 from math import factorial, prod
@@ -1180,6 +1181,105 @@ def check_baseline_comparison(args, directory):
     }
 
 
+def check_categorical_heldout(args, directory):
+    train, guard, test = 4, 2, 4
+    base = [9, 3, 9, 9]
+    mixed = [9, 3, 100, 9]
+    samples = [
+        base + [1, 2] + mixed[:-1],
+        base + [1, 2] + mixed,
+        base + [100, 100] + mixed + [0, 0, 0],
+        base + [1, 2] + [100] * 4,
+        base + [1, 2] + [9] * 4,
+        [90, 2, 8, 8, 81, 91, 2, 90, 2, 100],
+        [1, 80, 9, 9, 81, 91, 80, 1, 80, 101],
+    ]
+    trace = directory / "categorical-heldout.cltr"
+
+    def write_samples(observations):
+        chunks = [chunk(1, i, i, i, struct.pack(f"<{len(sample)}I", *sample))
+                  for i, sample in enumerate(observations)]
+        n = len(chunks)
+        data = (header(META | {"fixed_sites": False}) + b"".join(chunks)
+                + chunk(0, n, n-1, n-1))
+        trace.write_bytes(data)
+        return data
+
+    data = write_samples(samples)
+    output = run(args.eval, "--categorical-heldout", train, guard, test, trace)
+    rows = list(csv.DictReader(io.StringIO(output)))
+    assert len(rows) == len(samples)
+    fields = ("model_bits", "test_header_bits", "test_data_bits", "test_bits", "raw_bits",
+              "unseen_symbols", "conditional_gain_bits", "charged_gain_bits")
+
+    def independent(fit, observed):
+        counts = Counter(fit)
+        serial = len(counts) + 1
+        queue = [(count, i, (label,)) for i, (label, count) in enumerate(counts.items())]
+        queue.append((1, len(counts), (None,)))
+        heapq.heapify(queue)
+        depths = dict.fromkeys([*counts, None], 0)
+        while len(queue) > 1:
+            left_weight, _, left = heapq.heappop(queue)
+            right_weight, _, right = heapq.heappop(queue)
+            for label in left + right:
+                depths[label] += 1
+            heapq.heappush(queue, (left_weight + right_weight, serial, left + right))
+            serial += 1
+
+        def gamma(n):
+            return 2 * n.bit_length() - 1
+
+        unseen = sum(label not in counts for label in observed)
+        model = gamma(len(counts)) + sum(32 + gamma(n) for n in counts.values())
+        header_bits = gamma(len(observed) + 1)
+        payload = sum(depths[label] if label in counts else 32 + depths[None] for label in observed)
+        raw = header_bits + 32 * len(observed)
+        gain = raw - (header_bits + payload)
+        return model, header_bits, payload, header_bits + payload, raw, unseen, gain, gain - model
+
+    checks = []
+    for i, (sample, row) in enumerate(zip(samples, rows)):
+        assert row["sequence"] == row["work"] == str(i)
+        assert row["symbol_count"] == str(len(sample))
+        assert row["code_id"] == "categorical.frozen_huffman.v1"
+        assert [row[key] for key in ("train_symbols", "guard_symbols", "test_symbols")] == [
+            str(train), str(guard), str(test),
+        ]
+        if len(sample) < train + guard + test:
+            assert row["status"] == "insufficient_data" and not any(row[key] for key in fields)
+            continue
+        assert row["status"] == "valid"
+        actual = tuple(int(row[key]) for key in fields)
+        assert actual == independent(sample[:train], sample[train+guard:train+guard+test])
+        checks.append(actual)
+
+    assert checks[0] == checks[1] == (71, 5, 38, 43, 133, 1, 90, 19)
+    assert checks[2] == (71, 5, 136, 141, 133, 4, -8, -79)
+    assert checks[3] == (71, 5, 4, 9, 133, 0, 124, 53)
+    assert checks[4] == checks[5]
+
+    write_samples([[3] * 4098])
+    capped, = csv.DictReader(io.StringIO(run(args.eval, "--categorical-heldout", 4097, 0, 1, trace)))
+    assert capped["status"] == "budget_exceeded" and not any(capped[key] for key in fields)
+    trace.write_bytes(header() + chunk(2, 0, 0, 0, struct.pack("<3Q", 1, 0, 0)) + chunk(0, 1, 0, 0))
+    unsupported, = csv.DictReader(io.StringIO(run(args.eval, "--categorical-heldout", train, guard, test, trace)))
+    assert unsupported["status"] == "unsupported" and not unsupported["symbol_count"]
+    assert not any(unsupported[key] for key in fields)
+    for split in ((0, 2, 4), (4, -1, 4), (4, 2, 0), ("bad", 2, 4), (2**64 - 1, 1, 1)):
+        assert not run(args.eval, "--categorical-heldout", *split, trace, code=2)
+    trace.write_bytes(data[:-1])
+    run(args.eval, "--categorical-heldout", train, guard, test, trace, code=1)
+    return {
+        "trace_sha256": hashlib.sha256(data).hexdigest(),
+        "csv_sha256": hashlib.sha256(output.encode()).hexdigest(),
+        "valid_rows": len(checks),
+        "short_rows": 1,
+        "mixed_gains": checks[0][-2:],
+        "shifted_gains": checks[2][-2:],
+    }
+
+
 def check(args, directory):
     assert crc32c(b"123456789") == 0xE3069283
     first = struct.pack("<4I", 0, 0, 1, 1)
@@ -1265,6 +1365,7 @@ def check(args, directory):
         "categorical_codes": check_categorical_codes(args, directory),
         "categorical_iid": check_categorical_iid(args, directory),
         "baseline_comparison": check_baseline_comparison(args, directory),
+        "categorical_heldout": check_categorical_heldout(args, directory),
     }
     assert result["categorical_sha256"] == "3dda44df0c60342ddd2b6456bbb350ea66a50141d86dc62ba4e887a0000fc9ba"
     assert result["events_sha256"] == "5f5e31d67be90e5eea677c262b01358df9cc2427ff86a17d975c44f4d34ddac1"

@@ -1,4 +1,5 @@
 #include <clab/categorical_code.hpp>
+#include <clab/categorical_heldout.hpp>
 #include <clab/evaluator.hpp>
 #include <clab/trace.hpp>
 #ifdef CLAB_TEST_SUBSTRATES
@@ -621,6 +622,75 @@ void categorical_comparison_fixtures() {
     });
 }
 
+void categorical_heldout_fixtures() {
+    const std::array<clab::TypeId, 4> train{9, 3, 9, 9};
+    const auto fitted = clab::FrozenCategoricalModel::fit(train);
+    const auto& model = fitted.model_code();
+    require(model.length == clab::CodeLength{0, 71, 0} &&
+            model.bytes == hex_bytes("400000012c0000000e"), "frozen categorical model bytes");
+    const auto restored = clab::FrozenCategoricalModel::from_bytes(model.bytes, model.length.total_bits());
+    const std::array<clab::TypeId, 4> test{9, 3, 100, 9};
+    const auto heldout = fitted.encode(test);
+    require(heldout.unseen_symbols == 1 && heldout.code.length == clab::CodeLength{5, 0, 38} &&
+            heldout.code.bytes == hex_bytes("2c4000001920"), "frozen categorical test bytes");
+    require(std::ranges::equal(restored.decode(heldout.code.bytes, heldout.code.length.total_bits()), test),
+            "standalone frozen model decode");
+    const auto shifted = restored.encode(std::array<clab::TypeId, 4>{100, 100, 100, 100});
+    require(shifted.unseen_symbols == 4 && shifted.code.length.data_bits == 136,
+            "unseen labels must pay an escape every time");
+    require(fitted.encode(test).code.bytes == heldout.code.bytes &&
+            restored.model_code().bytes == model.bytes, "scoring updated the fitted model");
+
+    const std::array<clab::TypeId, 3> tied{90, 2, 8}, renamed_train{1, 80, 9};
+    const std::array<clab::TypeId, 5> probe{2, 90, 2, 8, 100}, renamed_test{80, 1, 80, 9, 101};
+    const auto renamed = clab::FrozenCategoricalModel::fit(renamed_train);
+    const auto a = clab::FrozenCategoricalModel::fit(tied).encode(probe);
+    const auto b = renamed.encode(renamed_test);
+    require(a.code.length == b.code.length && b.unseen_symbols == 1 &&
+            std::ranges::equal(renamed.decode(b.code.bytes, b.code.length.total_bits()), renamed_test),
+            "relabeling changed frozen tie order or decode");
+
+    const auto empty = fitted.encode({});
+    require(empty.code.bytes == hex_bytes("80") && empty.code.length.total_bits() == 1 &&
+            fitted.decode(empty.code.bytes, 1).empty(), "frozen categorical empty test");
+
+    expect_error(clab::ErrorCode::invalid, [] {
+        (void)clab::FrozenCategoricalModel::fit({});
+    });
+    expect_error(clab::ErrorCode::limit, [] {
+        (void)clab::FrozenCategoricalModel::fit(std::vector<clab::TypeId>(4097, 3));
+    });
+    expect_error(clab::ErrorCode::invalid, [] {
+        (void)clab::FrozenCategoricalModel::from_bytes(hex_bytes("400000012c00000026"), 71);
+    });
+    expect_error(clab::ErrorCode::invalid, [&] {
+        (void)restored.decode(hex_bytes("4800000048"), 37);
+    });
+    expect_error(clab::ErrorCode::incomplete, [&] {
+        (void)restored.decode(hex_bytes("2c40000019"), 40);
+    });
+    expect_error(clab::ErrorCode::limit, [&] {
+        (void)restored.decode(heldout.code.bytes, heldout.code.length.total_bits(), {3, 64});
+    });
+
+    clab::Rng rng(507);
+    for (std::size_t n = 1; n <= 64; ++n) {
+        std::vector<clab::TypeId> training(n), evaluation(n + 3);
+        for (auto& symbol : training) {
+            symbol = static_cast<clab::TypeId>(rng.next() % 17);
+        }
+        for (auto& symbol : evaluation) {
+            symbol = static_cast<clab::TypeId>(rng.next() % 41);
+        }
+        const auto fit = clab::FrozenCategoricalModel::fit(training);
+        const auto& bytes = fit.model_code();
+        const auto decode = clab::FrozenCategoricalModel::from_bytes(bytes.bytes, bytes.length.total_bits());
+        const auto trial = fit.encode(evaluation);
+        require(decode.decode(trial.code.bytes, trial.code.length.total_bits()) == evaluation,
+                "frozen categorical seeded round trip");
+    }
+}
+
 #ifdef CLAB_TEST_SUBSTRATES
 void replay() {
     expect_error(clab::ErrorCode::limit, [] { clab::BinaryCa world(9, 0, 71); });
@@ -662,6 +732,7 @@ int main() {
         categorical_code_fixtures();
         iid_code_fixtures();
         categorical_comparison_fixtures();
+        categorical_heldout_fixtures();
 #ifdef CLAB_TEST_SUBSTRATES
         replay();
 #endif

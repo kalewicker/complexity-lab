@@ -20,6 +20,7 @@ build/release/clab-eval build/demo/trace.cltr
 build/release/clab-eval --categorical-baselines build/demo/trace.cltr
 build/release/clab-eval --categorical-iid build/demo/trace.cltr
 build/release/clab-eval --categorical-compare build/demo/trace.cltr
+build/release/clab-eval --categorical-heldout 4 1 4 build/demo/trace.cltr
 build/release/clab-eval --list-metrics
 build/release/clab-eval --plan-metrics --metric state.shannon_bits_per_symbol.v1
 build/release/clab-eval --metric state.shannon_bits_per_symbol.v1 build/demo/trace.cltr
@@ -67,3 +68,4 @@ For attributed relational traces, `clab-inspect --metadata` lists the schema and
 - [Exact categorical baseline codes](docs/E01-categorical-codes.md)
 - [Exact categorical IID code](docs/E01-categorical-iid.md)
 - [Categorical baseline family comparison](docs/E01-baseline-comparison.md)
+- [Frozen categorical held-out evaluation](docs/E01-categorical-heldout.md)
