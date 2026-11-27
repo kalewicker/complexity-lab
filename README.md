@@ -20,6 +20,7 @@ build/release/clab-eval build/demo/trace.cltr
 build/release/clab-eval --list-metrics
 build/release/clab-eval --plan-metrics --metric state.shannon_bits_per_symbol.v1
 build/release/clab-eval --metric state.shannon_bits_per_symbol.v1 build/demo/trace.cltr
+build/release/clab-eval --cache-dir build/eval-cache build/demo/trace.cltr
 ```
 
 Choose a fresh directory for each fixture run. For traces containing checkpoint references, `clab-inspect --checkpoints TRACE.cltr` lists their format, size and SHA-256. Use `clab-inspect --verify-checkpoint SEQUENCE CHECKPOINT_FILE TRACE.cltr` to compare one reference against a local file. The demo records a tiny Rule 90 world under a five-sweep cap. Use `clab-fixture --scenario wall-cap NEW_OUTPUT_DIRECTORY` to exercise the watchdog, or `--scenario crash` to exercise a worker failure. In either case, the parent writes one terminal row to `status.csv`. Its trace path is relative to the output directory. For an incomplete trace, use `clab-inspect --recover-prefix` on that path. The initial configure fetches the pinned MIT-licensed nlohmann/json 3.11.3 header and verifies its SHA-256. For an offline configure, set `-DCLAB_JSON_HEADER=/path/to/json.hpp` to a verified copy. The evaluator needs only a trace at runtime.
@@ -59,3 +60,4 @@ For attributed relational traces, `clab-inspect --metadata` lists the schema and
 - [Relational attribute verification](docs/E00-attributes-results.md)
 - [Tier-0 metric registry verification](docs/E01-registry-results.md)
 - [Tier-0 dependency plan verification](docs/E01-dependencies-results.md)
+- [Persistent histogram cache verification](docs/E01-histogram-cache-results.md)

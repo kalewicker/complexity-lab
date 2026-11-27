@@ -46,9 +46,13 @@ struct MetricSpec {
 [[nodiscard]] std::vector<std::string>
 plan_metrics(std::span<const std::string_view> selected = {});
 
+class HistogramCache;
+
 using MetricSink = std::function<void(const MetricRow&)>;
 void evaluate(IObservationSource& source, const MetricSink& sink, EvalLimits limits = {});
 // An empty selection means all diagnostics. Listed IDs are validated before reading.
 void evaluate(IObservationSource& source, const MetricSink& sink, EvalLimits limits,
               std::span<const std::string_view> selected);
+void evaluate(IObservationSource& source, const MetricSink& sink, EvalLimits limits,
+              std::span<const std::string_view> selected, HistogramCache& cache);
 }

@@ -1,0 +1,12 @@
+{
+  "protocol": "E01-histogram-cache-v1",
+  "scope": "optional persistent cache for the existing exact categorical symbol histogram",
+  "checks": {
+    "parity": "uncached, cold and warm evaluations yield identical CSV; entropy and per-symbol counts share one cached histogram per snapshot",
+    "identity": "changing symbols, their order, encoding or coverage produces a miss; independent collisions cannot reuse an entry with different exact input bytes",
+    "recovery": "corrupt and incomplete entries rebuild, concurrent writers yield a valid entry, and unavailable storage still returns the exact diagnostic",
+    "bounds": "64 replaceable slots of at most 256 KiB each; oversize entries compute without persistence; unrelated metric selection creates no entries",
+    "install": "repeat the checks in the release, sanitizer, and substrate-free matrix on all three supported hosts"
+  },
+  "limits": "local derived-data cache only. No estimator results, scientific cache keys, timing claims or calibration."
+}

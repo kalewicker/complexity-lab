@@ -1,4 +1,5 @@
 #include <clab/evaluator.hpp>
+#include <clab/histogram_cache.hpp>
 
 #include <algorithm>
 #include <array>
@@ -186,8 +187,8 @@ void evaluate(IObservationSource& source, const MetricSink& sink, EvalLimits lim
     evaluate(source, sink, limits, {});
 }
 
-void evaluate(IObservationSource& source, const MetricSink& sink, EvalLimits limits,
-              std::span<const std::string_view> selected) {
+static void evaluate_impl(IObservationSource& source, const MetricSink& sink, EvalLimits limits,
+                          std::span<const std::string_view> selected, HistogramCache* cache) {
     const auto plan = plan_metrics(selected);
     const auto needs = [&](std::string_view id) {
         return std::ranges::find(plan, id) != plan.end();
@@ -229,10 +230,8 @@ void evaluate(IObservationSource& source, const MetricSink& sink, EvalLimits lim
                 emit(stamp, longest_run, longest_symbol_run(symbols));
             }
             if (needs_symbols) {
-                std::map<TypeId, std::uint64_t> histogram;
-                for (const auto symbol : symbols) {
-                    ++histogram[symbol];
-                }
+                const auto histogram = cache ? cache->get(source.metadata(), symbols)
+                                             : count_symbols(symbols);
                 double bits = 0;
                 for (const auto [symbol, count] : histogram) {
                     const auto probability = static_cast<double>(count) / symbols.size();
@@ -384,4 +383,14 @@ void evaluate(IObservationSource& source, const MetricSink& sink, EvalLimits lim
         }
     }
 }
+void evaluate(IObservationSource& source, const MetricSink& sink, EvalLimits limits,
+              std::span<const std::string_view> selected) {
+    evaluate_impl(source, sink, limits, selected, nullptr);
+}
+
+void evaluate(IObservationSource& source, const MetricSink& sink, EvalLimits limits,
+              std::span<const std::string_view> selected, HistogramCache& cache) {
+    evaluate_impl(source, sink, limits, selected, &cache);
+}
+
 }

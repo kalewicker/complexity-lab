@@ -45,7 +45,7 @@ target_link_libraries(observation PUBLIC foundation)
 clab_library(trace src/trace.cpp)
 target_link_libraries(trace PUBLIC observation)
 target_include_directories(trace SYSTEM PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/private")
-clab_library(evaluator src/evaluator.cpp src/dependencies.cpp)
+clab_library(evaluator src/evaluator.cpp src/dependencies.cpp src/histogram_cache.cpp)
 target_link_libraries(evaluator PUBLIC observation)
 
 add_executable(clab-eval apps/eval.cpp)

@@ -1,4 +1,5 @@
 #include <clab/evaluator.hpp>
+#include <clab/histogram_cache.hpp>
 #include <clab/trace.hpp>
 
 #include <array>
@@ -35,6 +36,7 @@ int main(int argc, char** argv) {
         std::array<clab::EntityRow, 1>{{{7, 0}}}, {}, {}, values, schema)});
     writer.finish();
     clab::TraceReader trace(path);
+    clab::HistogramCache cache(path.parent_path() / (path.filename().string() + ".cache"));
     if (trace.metadata() != meta) {
         return 1;
     }
@@ -46,6 +48,7 @@ int main(int argc, char** argv) {
         if (row.id == "relational.entity_count.v1") {
             found_entity = row.value && std::get<std::uint64_t>(*row.value) == 1;
         }
-    });
-    return found_entropy && found_entity && trace.status() == clab::TraceStatus::complete ? 0 : 1;
+    }, {}, {}, cache);
+    const auto stats = cache.stats();
+    return stats.stores + stats.hits == 1 && found_entropy && found_entity && trace.status() == clab::TraceStatus::complete ? 0 : 1;
 }

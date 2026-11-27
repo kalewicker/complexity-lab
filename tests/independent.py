@@ -1,6 +1,7 @@
 """Produce CLTR bytes without using any C++ implementation code."""
 import argparse
 import csv
+from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
 import hashlib
 import io
@@ -836,6 +837,133 @@ def check_dependency_plan(args):
     }
 
 
+def check_histogram_cache(args, directory):
+    trace = directory / "cache-witness.cltr"
+    workspace = directory / "cache"
+    entropy_id = "state.shannon_bits_per_symbol.v1"
+    type_id = "state.type_count.v1"
+    selected = ("--metric", entropy_id, "--metric", type_id)
+
+    def encode_snapshot(symbols, metadata=META):
+        payload = struct.pack(f"<{len(symbols)}I", *symbols)
+        return header(metadata) + chunk(1, 0, 0, 0, payload) + chunk(0, 1, 0, 0)
+
+    baseline = encode_snapshot([0, 0, 1, 1])
+    trace.write_bytes(baseline)
+
+    def cached(cache_dir=workspace, flags=selected):
+        result = subprocess.run(
+            [str(args.eval), "--cache-dir", str(cache_dir), *flags, str(trace)],
+            text=True, capture_output=True, timeout=20,
+        )
+        assert result.returncode == 0, result.stderr
+        marker, *fields = result.stderr.split()
+        assert marker == "symbol_histogram_cache", result.stderr
+        return result.stdout, {key: int(value) for field in fields
+                               for key, value in [field.split("=")]}
+
+    def counters(hit=0, miss=0, stores=0, skipped=0, failures=0):
+        return dict(hits=hit, misses=miss, stores=stores, skipped=skipped, write_failures=failures)
+
+    expected = run(args.eval, *selected, trace)
+    assert cached() == (expected, counters(miss=1, stores=1))
+    assert cached() == (expected, counters(hit=1))
+    entropy_only = ("--metric", entropy_id)
+    assert cached(flags=entropy_only) == (run(args.eval, *entropy_only, trace), counters(hit=1))
+
+    cache_slots = workspace / "symbol-histogram-v1"
+    slot, = cache_slots.glob("*.bin")
+    entry = slot.read_bytes()
+
+    def lookup_hash(data):
+        value = 14695981039346656037
+        for byte in data:
+            value = ((value ^ byte) * 1099511628211) % (1 << 64)
+        return value
+
+    def exact_key(symbols):
+        encoding = META["encoding"].encode()
+        return (b"CLH1" + struct.pack("<BII", 1, len(encoding), len(symbols))
+                + encoding + struct.pack(f"<{len(symbols)}I", *symbols))
+
+    body = exact_key([0, 0, 1, 1]) + struct.pack("<IIQIQ", 2, 0, 2, 1, 2)
+    assert entry == body + struct.pack("<Q", lookup_hash(body))
+    assert slot.name == f"{lookup_hash(exact_key([0, 0, 1, 1])) % 64}.bin"
+
+    for damaged in (entry[:-1], entry[:-1] + bytes([entry[-1] ^ 1]), bytes(256 * 1024 + 1)):
+        slot.write_bytes(damaged)
+        assert cached() == (expected, counters(miss=1, stores=1))
+        assert slot.read_bytes() == entry
+
+    for alternate in (
+        encode_snapshot([0, 0, 1, 2]),
+        encode_snapshot([1, 0, 1, 0]),
+        encode_snapshot([0, 0, 1, 1], META | {"encoding": "other-u32"}),
+        encode_snapshot([0, 0, 1, 1], META | {"exact": False}),
+    ):
+        trace.write_bytes(alternate)
+        assert cached() == (run(args.eval, *selected, trace), counters(miss=1, stores=1))
+
+    collision = {}
+    for symbol in range(65):
+        position = lookup_hash(exact_key([symbol])) % 64
+        if position in collision:
+            pair = collision[position], symbol
+            break
+        collision[position] = symbol
+    else:
+        raise AssertionError("pigeonhole collision missing")
+    for symbol in (*pair, pair[0]):
+        trace.write_bytes(encode_snapshot([symbol]))
+        assert cached(directory / "collision") == (
+            run(args.eval, *selected, trace), counters(miss=1, stores=1),
+        )
+    assert cached(directory / "collision")[1] == counters(hit=1)
+
+    trace.write_bytes(baseline)
+    shared = directory / "shared"
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        first, second = [pool.submit(cached, shared) for _ in range(2)]
+        assert first.result()[0] == second.result()[0] == expected
+    assert cached(shared) == (expected, counters(hit=1))
+    assert not list(shared.rglob(".write-*"))
+
+    unavailable = directory / "cache-file"
+    unavailable.write_text("ordinary file")
+    assert cached(unavailable) == (expected, counters(miss=1, failures=1))
+    assert unavailable.read_text() == "ordinary file"
+
+    unrelated = directory / "unrelated"
+    scalar = ("--metric", "state.symbol_count.v1")
+    assert cached(unrelated, scalar) == (run(args.eval, *scalar, trace), counters())
+    assert not unrelated.exists()
+
+    oversize = directory / "oversize"
+    trace.write_bytes(encode_snapshot([0] * 65536))
+    assert cached(oversize) == (run(args.eval, *selected, trace), counters(skipped=1))
+    assert not oversize.exists()
+    trace.write_bytes(encode_snapshot(range(20000)))
+    assert cached(oversize, entropy_only) == (
+        run(args.eval, *entropy_only, trace), counters(miss=1, skipped=1),
+    )
+    assert not oversize.exists()
+
+    # One trace crosses the slot count without creating unbounded files.
+    many = header() + b"".join(chunk(1, i, i, i, struct.pack("<I", i)) for i in range(128))
+    trace.write_bytes(many + chunk(0, 128, 127, 127))
+    bounded = directory / "bounded"
+    assert cached(bounded) == (run(args.eval, *selected, trace), counters(miss=128, stores=128))
+    slots = list((bounded / "symbol-histogram-v1").glob("*.bin"))
+    assert len(slots) == 64 and all(p.stat().st_size <= 256 * 1024 for p in slots)
+    return {
+        "trace_sha256": hashlib.sha256(baseline).hexdigest(),
+        "csv_sha256": hashlib.sha256(expected.encode()).hexdigest(),
+        "cache_entry_sha256": hashlib.sha256(entry).hexdigest(),
+        "colliding_symbols": pair,
+        "resident_slots_after_128_inputs": len(slots),
+    }
+
+
 def check(args, directory):
     assert crc32c(b"123456789") == 0xE3069283
     first = struct.pack("<4I", 0, 0, 1, 1)
@@ -917,6 +1045,7 @@ def check(args, directory):
         "wire_compatibility": check_wire_compatibility(args, directory),
         "registry": check_registry(args, directory),
         "dependency_plan": check_dependency_plan(args),
+        "histogram_cache": check_histogram_cache(args, directory),
     }
     assert result["categorical_sha256"] == "3dda44df0c60342ddd2b6456bbb350ea66a50141d86dc62ba4e887a0000fc9ba"
     assert result["events_sha256"] == "5f5e31d67be90e5eea677c262b01358df9cc2427ff86a17d975c44f4d34ddac1"
