@@ -19,4 +19,4 @@ Independent replay matched all 19 draw gains and verified that anchor histories 
 | CLTR fixture | `8dfe3f16fdd14a2b8d381b23cc716d2aff4b68e2d9fe826f6d074d269a26f817` |
 | CSV report | `f5ab7b5b4622eec6c28f04beb102608911d3e4b95e93540cae135e66b7ac63b8` |
 
-Population calibration for the conditional test remains open.
+The [calibration design](E01-categorical-motif-dictionary-anchored-calibration.md) registers a population test with the first block fixed in both strata.

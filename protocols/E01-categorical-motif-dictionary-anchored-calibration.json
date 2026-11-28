@@ -1,0 +1,28 @@
+{
+  "protocol": "E01-categorical-motif-dictionary-anchored-calibration-v1",
+  "permutation_id": "categorical.two_motif_anchored_site_permutation.v1",
+  "split": {"train": 4, "guard": 1, "test": 3, "sites": 36},
+  "anchor": {"start": 8, "width": 6},
+  "population": {
+    "worlds_per_stratum": 350,
+    "strata": ["exchangeable_null", "planted_order"],
+    "motifs": [[1, 2, 3, 4, 5, 6], [7, 8, 9, 10, 11, 12]],
+    "nuisance_label_start": 100,
+    "generator": "sha256-counter-fisher-yates-v1",
+    "site_histories": "twelve constant and twenty-four varying histories, with fresh nuisance labels per frame and one site assignment through the guard",
+    "null_order": "fixed first block at the anchor, uniform permutation of the thirty remaining histories",
+    "plant_order": "fixed first block at the anchor, uniform start for the ordered second block contiguous and separated from the anchor by at least one nuisance site, uniform order of remaining histories"
+  },
+  "decision": {
+    "comparator": "first_entry",
+    "draws": 99,
+    "rank_cutoff": [1, 20],
+    "family_error": [1, 20],
+    "maximum_false_positive_rate": [1, 10],
+    "minimum_sensitivity": [4, 5],
+    "planning_false_positive_rate": [1, 20],
+    "planning_sensitivity": [9, 10]
+  },
+  "execution": {"timeout_seconds_per_world": 20, "smoke_worlds_per_stratum": 2},
+  "limits": "one prespecified anchor and two matched populations at one observation budget; simultaneous one-sided bounds; unresolved nulls count as possible rejections and unresolved plants as misses"
+}

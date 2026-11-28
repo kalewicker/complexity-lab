@@ -32,6 +32,11 @@ class CalibrationProtocol:
         return self.data["population"]["strata"]
 
     @property
+    def anchor(self):
+        anchor = self.data.get("anchor")
+        return (anchor["start"], anchor["width"]) if anchor else ()
+
+    @property
     def tail_error(self):
         return Fraction(*self.data["decision"]["family_error"]) / len(self.strata)
 
@@ -47,10 +52,13 @@ SITE_PROTOCOL = load_protocol("E01-categorical-motif-site-calibration.json",
                               "--categorical-motif-site-permutation", shared_sites=True)
 DICTIONARY_PROTOCOL = load_protocol("E01-categorical-motif-dictionary-site-calibration.json",
                                     "--categorical-motif-dictionary-site-permutation", shared_sites=True)
+ANCHORED_PROTOCOL = load_protocol("E01-categorical-motif-dictionary-anchored-calibration.json",
+                                  "--categorical-motif-dictionary-anchored-permutation", shared_sites=True)
 PROTOCOLS = {
     "independent-frame": FRAME_PROTOCOL,
     "shared-site": SITE_PROTOCOL,
     "dictionary-shared-site": DICTIONARY_PROTOCOL,
+    "dictionary-anchored": ANCHORED_PROTOCOL,
 }
 
 
@@ -160,13 +168,30 @@ def separated_block_order(rng, sites, first_width, second_width):
     ]
     first, second = starts[rng.below(len(starts))]
     persistent = first_width + second_width
-    nuisance = list(range(persistent, sites))
-    rng.shuffle(nuisance)
     order = [None] * sites
     order[first:first + first_width] = range(first_width)
     order[second:second + second_width] = range(first_width, persistent)
-    remaining = iter(nuisance)
+    return assign_unfilled_sites(rng, order, persistent)
+
+
+def assign_unfilled_sites(rng, order, first_remaining):
+    remaining = list(range(first_remaining, len(order)))
+    rng.shuffle(remaining)
+    remaining = iter(remaining)
     return [next(remaining) if index is None else index for index in order]
+
+
+def anchored_block_order(rng, sites, anchor, second_width, planted):
+    start, width = anchor
+    order = [None] * sites
+    order[start:start + width] = range(width)
+    if not planted:
+        return assign_unfilled_sites(rng, order, width)
+    choices = [i for i in range(sites - second_width + 1)
+               if i + second_width < start or start + width < i]
+    second = choices[rng.below(len(choices))]
+    order[second:second + second_width] = range(width, width + second_width)
+    return assign_unfilled_sites(rng, order, width + second_width)
 
 
 def world_trace(slot, protocol=FRAME_PROTOCOL):
@@ -178,7 +203,9 @@ def world_trace(slot, protocol=FRAME_PROTOCOL):
     rng = FrameRandom(slot["input_seed"])
     planted = slot["stratum"] == protocol.strata[1]
     order = None
-    if blocks and planted:
+    if protocol.anchor:
+        order = anchored_block_order(rng, sites, protocol.anchor, len(blocks[1]), planted)
+    elif blocks and planted:
         order = separated_block_order(rng, sites, *map(len, blocks))
     elif protocol.shared_sites:
         order = shared_site_order(rng, sites, len(motif), planted)
@@ -215,7 +242,8 @@ def launch(evaluator, directory, slot, protocol):
     data = world_trace(slot, protocol)
     trace.write_bytes(data)
     draws = protocol.data["decision"]["draws"]
-    command = [str(evaluator), protocol.command, *map(str, (*protocol.split, draws, slot["permutation_seed"])),
+    command = [str(evaluator), protocol.command,
+               *map(str, (*protocol.split, *protocol.anchor, draws, slot["permutation_seed"])),
                str(trace)]
     receipt = {"trace_sha256": sha256(data).hexdigest()}
     try:
@@ -245,6 +273,8 @@ def checked_rank(csv_text, slot, protocol):
             or row["status"] != "valid" or int(row["draws_requested"]) != draw_count
             or int(row["draws_complete"]) != draw_count or int(row["draws_budget_exceeded"]) != 0):
         raise ValueError("evaluator did not complete the planned permutation split")
+    if protocol.anchor and tuple(int(row[key]) for key in ("anchor_start", "anchor_width")) != protocol.anchor:
+        raise ValueError("evaluator anchor differs from the registered interval")
     first_entry = protocol.data["decision"].get("comparator") == "first_entry"
     gain = row["charged_gain_vs_first_bits" if first_entry else "charged_gain_bits"]
     absence = "no_training_dictionary" if first_entry else "no_training_motif"
