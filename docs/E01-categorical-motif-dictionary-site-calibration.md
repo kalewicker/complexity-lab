@@ -27,4 +27,19 @@ python3 scripts/calibrate_motifs.py audit build/dictionary-site-smoke
 
 The smoke worlds ranked 14/100 and 53/100 for the nulls, and 1/100 for both plants. The independent checks decoded frame histograms and persistent histories, verified separation of the planted blocks, reconciled recorded ranks and rejected a corrupted first-entry cost. The earlier calibration archives still reproduce their original reports.
 
-The `run` action uses the reserved 700-world roster with a fresh output directory and a 20-second timeout per world. The full panel remains unstarted.
+The `run` action uses the reserved 700-world roster with a fresh output directory and a 20-second timeout per world. These readiness checks preceded the registered execution.
+
+## Registered panel results
+
+The panel ran once from registration commit `de86c58abf6833fd9603a3ee6a195e52543efbbf` using the macOS arm64 release evaluator. All 700 worlds and 69,300 shared-site permutations completed, with zero unresolved or unstarted worlds.
+
+| Stratum | Rejected | Observed rate | Registered confidence bound | Result |
+|---|---:|---:|---|---|
+| Exchangeable null | 15 / 350 | 4.29% | False-positive upper bound 6.9702% | Pass |
+| Planted order | 350 / 350 | 100% | Sensitivity lower bound 98.9515% | Pass |
+
+Training admitted no pair in 32 null worlds. All stayed in the denominator with rank 100/100. Every plant gained 343–349 bits from the second entry after model costs and ranked 1/100, the finest resolution at 99 draws.
+
+The read-only audit reproduced the runner report byte for byte. A separate audit checked the roster and seed derivation, decoded the site histories and separated plant blocks, recomputed each rank from its recorded marginal gains, and verified both exact binomial decisions and outward-rounded bounds. The [per-world ledger](evidence/E01-categorical-motif-dictionary-site-calibration-v1-worlds.csv) includes input and receipt digests. The [machine-readable summary](evidence/E01-categorical-motif-dictionary-site-calibration-v1-summary.json) records the rank distributions and the protocol, manifest, evaluator, and report digests. The raw archive is at `build/categorical-motif-dictionary-site-calibration-v1`.
+
+Both criteria passed for the registered synthetic layout and observation budget. A null conditional on a known spatial first motif, other effect sizes, and structural scoring remain open.
