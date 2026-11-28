@@ -1,0 +1,79 @@
+{
+  "condition_count": 1050,
+  "conditions_csv_sha256": "2fa1d6725290caad4ccdb95dfd7349d362614443e618da6c2c88ec73231496d7",
+  "decision": {
+    "detected_plants": 350,
+    "false_positive_upper_millionths": 10485,
+    "pass": true,
+    "passing_growth_groups": 350,
+    "possible_false_positives": 0,
+    "sensitivity_lower_millionths": 989515,
+    "unstarted_groups": 0
+  },
+  "evaluator_sha256": "9c3b218df57de646f136333eb911059638e076e8357f85a5bb73abfa0ec6b2af",
+  "heldout_models": {
+    "diversify": {
+      "none": 0,
+      "pair": 350,
+      "single": 0
+    },
+    "early": {
+      "none": 0,
+      "pair": 63,
+      "single": 287
+    },
+    "repeat": {
+      "none": 0,
+      "pair": 0,
+      "single": 350
+    }
+  },
+  "manifest_sha256": "07d18d9ffc8248a6b2ea4622c5bc5d27ce0685b80e386b7b6b60ee5d69a8e3fa",
+  "matched_groups": 350,
+  "nominated_patterns": [
+    {
+      "condition": "diversify",
+      "count": 350,
+      "selected": "pair",
+      "test_matches": 6,
+      "width": 6
+    },
+    {
+      "condition": "early",
+      "count": 49,
+      "selected": "single",
+      "test_matches": 2,
+      "width": 2
+    },
+    {
+      "condition": "early",
+      "count": 14,
+      "selected": "single",
+      "test_matches": 3,
+      "width": 2
+    }
+  ],
+  "platform": "Darwin arm64",
+  "protocol": "E01-categorical-repetition-conditional-support-v1",
+  "protocol_sha256": "f2540366add183169e538277fde6943307f494e4a11e0fec80e5aa592db12619",
+  "registration_commit": "39aa941121cb82934cdafe5e3010e79d0a4d7992",
+  "report_sha256": "a6d94d658d7d99076ba9ad0edca78df3b7299c884dfa39b58f19027ff854b7b7",
+  "supported_models": {
+    "diversify": {
+      "none": 0,
+      "pair": 350,
+      "single": 0
+    },
+    "early": {
+      "none": 0,
+      "pair": 0,
+      "single": 350
+    },
+    "repeat": {
+      "none": 0,
+      "pair": 0,
+      "single": 350
+    }
+  },
+  "unresolved_conditions": 0
+}

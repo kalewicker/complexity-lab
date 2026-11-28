@@ -34,4 +34,20 @@ python3 scripts/audit_repetition_support.py build/categorical-repetition-growth-
 python3 scripts/calibrate_repetition_support.py smoke --eval build/release/clab-eval --out build/repetition-conditional-support-smoke
 ```
 
-Both smoke groups passed the growth ordering. One early trace admitted a second entry on held-out savings and fell back to a single entry after the exact check. Both smoke plants kept the second entry. The smoke report reproduced byte for byte, and separate checks verified exact tails and the registered count boundaries. The 350 reserved groups use a separate seed namespace and remain unstarted.
+Both smoke groups passed the growth ordering. One early trace admitted a second entry on held-out savings and fell back to a single entry after the exact check. Both smoke plants kept the second entry. The smoke report reproduced byte for byte, and separate checks verified exact tails and the registered count boundaries. The 350 reserved groups used a separate seed namespace.
+
+## Registered results
+
+The panel ran once from registration commit `39aa941121cb82934cdafe5e3010e79d0a4d7992` with the macOS arm64 release evaluator. All 350 matched groups and 1,050 conditions completed. Each registered gate passed.
+
+| Gate | Observed result | Registered requirement |
+|---|---:|---:|
+| Possible false positives | 0 / 350, upper bound 1.0485% | At most 23, upper bound at most 10% |
+| Planted second entries retained | 350 / 350, lower bound 98.9515% | At least 295, lower bound at least 80% |
+| Matched growth ordering | 350 / 350 | At least 315 |
+
+Held-out savings alone favored a second entry in 63 null traces. All 63 nominees were two-symbol patterns. Of these, 49 matched twice and 14 matched three times across the six test slots. The exact test screened out all 63. Every planted order matched in all six test slots and retained its second entry. In every group, definition cost stayed at 197 bits under repetition and rose to 394 bits under diversification.
+
+A separate audit regenerated the slot assignments from the registered seeds, decoded all traces, reconciled the scorer receipts, and independently recovered the training nominees. It recomputed each exact tail by counting orders that contain the fixed pattern as a contiguous block, and verified the three decisions and outward-rounded bounds. The raw archive is at `build/categorical-repetition-conditional-support-v1`. [Per-condition ledger](evidence/E01-categorical-repetition-conditional-support-v1-conditions.csv) · [Summary and digests](evidence/E01-categorical-repetition-conditional-support-v1-summary.json)
+
+This result supports the conditional test at the registered observation budget with a known first motif and independently shuffled slots. Other backgrounds, inferred first motifs, and representation and scale tests remain open. [G1 status](G1-status.md)
