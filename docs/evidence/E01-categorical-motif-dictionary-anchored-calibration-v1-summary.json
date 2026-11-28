@@ -1,0 +1,113 @@
+{
+  "bounds": {
+    "detected_plants": 350,
+    "false_positive_pass": true,
+    "false_positive_upper_millionths": 62678,
+    "possible_false_positives": 13,
+    "sensitivity_lower_millionths": 989515,
+    "sensitivity_pass": true
+  },
+  "completed_permutations": 69300,
+  "evaluator_sha256": "9c3b218df57de646f136333eb911059638e076e8357f85a5bb73abfa0ec6b2af",
+  "host": {
+    "architecture": "arm64",
+    "system": "Darwin"
+  },
+  "manifest_sha256": "7acc84858556a95a55715afa51ae5f74de4a785809ac581f07e1ac7b735bfd73",
+  "protocol": "E01-categorical-motif-dictionary-anchored-calibration-v1",
+  "protocol_sha256": "26433b00dbdf40cd3d589031a96ec5d3897b6c6ee500b23fc82f1a5fd9a026b6",
+  "rank_numerator_histograms": {
+    "exchangeable_null": {
+      "1": 4,
+      "2": 3,
+      "3": 2,
+      "4": 2,
+      "5": 2,
+      "6": 1,
+      "7": 2,
+      "8": 2,
+      "9": 3,
+      "10": 2,
+      "11": 2,
+      "12": 5,
+      "13": 2,
+      "14": 5,
+      "15": 8,
+      "16": 1,
+      "17": 4,
+      "18": 2,
+      "19": 2,
+      "20": 1,
+      "21": 3,
+      "22": 2,
+      "23": 3,
+      "25": 1,
+      "26": 1,
+      "27": 6,
+      "28": 3,
+      "29": 2,
+      "30": 7,
+      "31": 7,
+      "32": 5,
+      "33": 2,
+      "35": 1,
+      "36": 2,
+      "38": 3,
+      "39": 2,
+      "52": 1,
+      "53": 2,
+      "54": 2,
+      "55": 8,
+      "56": 3,
+      "57": 3,
+      "58": 9,
+      "59": 7,
+      "60": 5,
+      "61": 6,
+      "62": 6,
+      "63": 6,
+      "64": 11,
+      "65": 6,
+      "66": 4,
+      "67": 13,
+      "68": 4,
+      "69": 6,
+      "70": 7,
+      "71": 5,
+      "72": 1,
+      "73": 2,
+      "74": 1,
+      "75": 3,
+      "77": 2,
+      "78": 1,
+      "79": 2,
+      "80": 1,
+      "100": 118
+    },
+    "planted_order": {
+      "1": 350
+    }
+  },
+  "registration_commit": "c89e39242cbcadc018967703ac37303cf00cd790",
+  "report_sha256": "25052742beb879a11fbe8752575c155c0955ac4f261943ad0ee8a672c8a5b935",
+  "strata": {
+    "exchangeable_null": {
+      "rejected": 13,
+      "retained": 337,
+      "unresolved": 0,
+      "unstarted": 0
+    },
+    "planted_order": {
+      "rejected": 350,
+      "retained": 0,
+      "unresolved": 0,
+      "unstarted": 0
+    }
+  },
+  "world_count": 700,
+  "worlds_csv_sha256": "c7eee92d51b8270edff8457943477e45d0e02b624b3bc2223a9a8b1d0ca5573a",
+  "worlds_without_admitted_dictionary": {
+    "exchangeable_null": 118,
+    "planted_order": 0
+  }
+}

@@ -1,0 +1,22 @@
+{
+  "protocol": "E01-categorical-repetition-growth-v1",
+  "split": {"train": 4, "guard": 1, "test": 3, "sites": 168},
+  "population": {
+    "pairs": 24,
+    "smoke_pairs": 2,
+    "slots": 24,
+    "early_motif_slots": 22,
+    "labels": [1, 2, 3, 4, 5, 6],
+    "separator_start": 100,
+    "generator": "sha256-counter-fisher-yates-v1",
+    "conditions": ["early", "repeat", "diversify"]
+  },
+  "decision": {
+    "required_early_model": "single",
+    "minimum_passing_pairs": 22,
+    "maximum_repetition_fraction_of_growth": [1, 10],
+    "minimum_growth_definition_bits": 1
+  },
+  "execution": {"timeout_seconds_per_score": 20},
+  "scope": "paired synthetic development fixtures at one scale and effect size"
+}

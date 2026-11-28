@@ -27,4 +27,19 @@ python3 scripts/calibrate_motifs.py audit build/dictionary-anchored-smoke
 
 The two smoke nulls ranked 100/100 and 28/100. Both smoke plants ranked 1/100. Independent checks decoded the frames, verified the anchor and planted layouts, recomputed the ranks from recorded gains, and confirmed that the audit marked a receipt with a mismatched anchor as unresolved.
 
-The `run` action uses the reserved 700-world roster with a fresh output directory and a 20-second timeout per world. All 700 registered slots are unstarted.
+The `run` action uses the reserved 700-world roster with a fresh output directory and a 20-second timeout per world.
+
+## Registered panel results
+
+The panel ran once from registration commit `c89e39242cbcadc018967703ac37303cf00cd790` using the macOS arm64 release evaluator. All 700 worlds and 69,300 anchored permutations completed, with zero unresolved or unstarted worlds.
+
+| Stratum | Rejected | Observed rate | Registered confidence bound | Result |
+|---|---:|---:|---|---|
+| Exchangeable null | 13 / 350 | 3.71% | False-positive upper bound 6.2678% | Pass |
+| Planted order | 350 / 350 | 100% | Sensitivity lower bound 98.9515% | Pass |
+
+Training admitted no pair in 118 null worlds. All stayed in the denominator with rank 100/100. Every plant ranked 1/100.
+
+The read-only audit reproduced the runner report byte for byte. A separate audit checked the roster, seed derivation, fixed anchor, planted layouts, per-world ranks and exact binomial decisions. The raw archive is at `build/categorical-motif-dictionary-anchored-calibration-v1`. [Per-world ledger](evidence/E01-categorical-motif-dictionary-anchored-calibration-v1-worlds.csv) · [Summary and digests](evidence/E01-categorical-motif-dictionary-anchored-calibration-v1-summary.json)
+
+The 350 independent worlds in each stratum provide the trials for the population error and sensitivity bounds. The 99 permutations within each world give a Monte Carlo rank with resolution 1/100. The population count satisfies the E01c planning target of at least 200 independent null trials for this stratum. Coverage of the other planned null families and scales remains open. [G1 status](G1-status.md)
