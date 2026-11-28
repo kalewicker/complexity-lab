@@ -1,0 +1,34 @@
+{
+  "protocol": "E01-categorical-repetition-conditional-support-v1",
+  "parent_fixture_protocol": "E01-categorical-repetition-growth-v1",
+  "split": {"train": 4, "guard": 1, "test": 3, "sites": 168},
+  "population": {
+    "matched_groups": 350,
+    "smoke_groups": 2,
+    "slots": 24,
+    "early_motif_slots": 22,
+    "labels": [1, 2, 3, 4, 5, 6],
+    "separator_start": 100,
+    "generator": "sha256-counter-fisher-yates-v1",
+    "namespace": "<protocol>\n<mode>\n<group_index>\n",
+    "conditions": ["early", "repeat", "diversify"],
+    "exclude_reverse_in_background": false,
+    "background": "independent uniform orders of the six labels excluding A in the two designated slots of every frame",
+    "plant": "reverse A in both designated slots of every frame",
+    "repetition_control": "A in all 24 slots in every frame"
+  },
+  "decision": {
+    "tail_cutoff": [1, 20],
+    "family_error": [1, 20],
+    "maximum_false_positive_rate": [1, 10],
+    "minimum_sensitivity": [4, 5],
+    "maximum_possible_false_positives": 23,
+    "minimum_detected_plants": 295,
+    "minimum_passing_growth_groups": 315,
+    "required_early_model": "single",
+    "minimum_growth_definition_bits": 1,
+    "maximum_repetition_fraction_of_growth": [1, 10]
+  },
+  "execution": {"timeout_seconds_per_score": 20},
+  "scope": "known first motif and fixed slot layout at one categorical observation budget"
+}

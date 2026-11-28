@@ -90,6 +90,7 @@ For attributed relational traces, `clab-inspect --metadata` lists the schema and
 - [Anchored permutation test for the second entry](docs/E01-categorical-motif-dictionary-anchored-permutation.md)
 - [Anchored second-entry calibration design and results](docs/E01-categorical-motif-dictionary-anchored-calibration.md)
 - [Matched repetition and motif growth design and results](docs/E01-categorical-repetition-growth.md)
+- [Conditional support for a second motif](docs/E01-categorical-repetition-conditional-support.md)
 - [Frozen categorical motif transfer](docs/E01-categorical-motif-heldout.md)
 - [Temporal categorical motif transfer](docs/E01-categorical-motif-temporal.md)
 - [Temporal motif permutation test](docs/E01-categorical-motif-permutation.md)

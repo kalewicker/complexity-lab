@@ -31,6 +31,7 @@ def matched_traces(seed, pair_id, protocol):
     positions = list(range(slots))
     rng.shuffle(positions)
     a_positions = set(positions[:population["early_motif_slots"]])
+    excluded = (motif_a, motif_b) if population.get("exclude_reverse_in_background", True) else (motif_a,)
     conditions = population["conditions"]
     traces = {condition: bytearray(header(META | {"run_id": f"{pair_id}-{condition}"}))
               for condition in conditions}
@@ -44,7 +45,7 @@ def matched_traces(seed, pair_id, protocol):
             if slot not in a_positions:
                 diverse = motif_b
                 early = motif_a.copy()
-                while early == motif_a or early == motif_b:
+                while early in excluded:
                     rng.shuffle(early)
             separator = population["separator_start"] + frame * slots + slot
             for condition, motif in zip(conditions, (early, motif_a, diverse)):

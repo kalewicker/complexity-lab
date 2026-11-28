@@ -52,6 +52,8 @@ All 24 repeated traces selected one entry, and all 24 diversified traces selecte
 
 A separate audit decoded all 72 traces, checked matching slot layouts and label counts, reconciled the scorer receipts, and recomputed all 24 decisions. The raw archive is at `build/categorical-repetition-growth-v1`. [Per-pair ledger with definition, placement, and held-out gain bits](evidence/E01-categorical-repetition-growth-v1-pairs.csv)
 
+The follow-up diagnostic recovered the four early candidates and checked their observed counts under the shuffled-slot background. The follow-up registers a conditional support test on fresh layouts. [Conditional support diagnosis and design](E01-categorical-repetition-conditional-support.md)
+
 | Artifact | SHA-256 |
 |---|---|
 | Protocol | `08658eb1c1cce18ded9e08b2018a502e807c0e4b01c986c5cf0166993b9cabfb` |
