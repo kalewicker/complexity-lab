@@ -86,6 +86,7 @@ For attributed relational traces, `clab-inspect --metadata` lists the schema and
 - [Temporal transfer of a two-entry dictionary](docs/E01-categorical-motif-dictionary-temporal.md)
 - [Shared-site permutation test for the second entry](docs/E01-categorical-motif-dictionary-site-permutation.md)
 - [Second-entry shared-site calibration design and results](docs/E01-categorical-motif-dictionary-site-calibration.md)
+- [Anchored permutation test for the second entry](docs/E01-categorical-motif-dictionary-anchored-permutation.md)
 - [Frozen categorical motif transfer](docs/E01-categorical-motif-heldout.md)
 - [Temporal categorical motif transfer](docs/E01-categorical-motif-temporal.md)
 - [Temporal motif permutation test](docs/E01-categorical-motif-permutation.md)

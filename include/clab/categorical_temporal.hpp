@@ -1,6 +1,7 @@
 #pragma once
 
 #include <clab/categorical_heldout.hpp>
+#include <clab/categorical_motif.hpp>
 #include <clab/evaluator.hpp>
 
 namespace clab {
@@ -85,6 +86,8 @@ inline constexpr std::string_view temporal_motif_permutation_id = "categorical.f
 inline constexpr std::string_view temporal_motif_site_permutation_id = "categorical.shared_site_permutation.v1";
 inline constexpr std::string_view temporal_dictionary_site_permutation_id =
     "categorical.two_motif_shared_site_permutation.v1";
+inline constexpr std::string_view temporal_dictionary_anchored_permutation_id =
+    "categorical.two_motif_anchored_site_permutation.v1";
 
 struct TemporalMotifPermutationDraw {
     MetricStatus status{MetricStatus::valid};
@@ -116,4 +119,9 @@ struct TemporalDictionaryPermutationResult {
 [[nodiscard]] TemporalDictionaryPermutationResult
 score_categorical_motif_dictionary_site_permutations(IObservationSource& source, TemporalCategoricalSplit split,
                                                       std::size_t draws, std::uint64_t seed, CodeLimits limits = {});
+
+[[nodiscard]] TemporalDictionaryPermutationResult
+score_categorical_motif_dictionary_anchored_permutations(
+    IObservationSource& source, TemporalCategoricalSplit split, CategoricalMotifAnchor anchor,
+    std::size_t draws, std::uint64_t seed, CodeLimits limits = {});
 }

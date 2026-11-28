@@ -167,11 +167,14 @@ private:
 
 class TemporalDictionaryScorer {
 public:
+    explicit TemporalDictionaryScorer(std::optional<CategoricalMotifAnchor> anchor = std::nullopt) : anchor_(anchor) {}
+
     void fit(std::span<const TypeId> training, std::size_t sites,
              CodeLimits limits, TemporalCategoricalDictionaryCosts& costs) {
         baseline_.emplace(FrozenCategoricalModel::fit(training, limits));
         costs.baseline_model = baseline_->model_code();
-        model_ = FrozenCategoricalMotifDictionary::fit_frames(training, sites, limits);
+        model_ = anchor_ ? FrozenCategoricalMotifDictionary::fit_anchored_frames(training, sites, *anchor_, limits)
+                         : FrozenCategoricalMotifDictionary::fit_frames(training, sites, limits);
         if (model_) {
             auto& dictionary = costs.dictionary.emplace();
             dictionary.model = model_->model_code();
@@ -198,6 +201,7 @@ public:
     }
 
 private:
+    std::optional<CategoricalMotifAnchor> anchor_;
     std::optional<FrozenCategoricalModel> baseline_;
     std::optional<FrozenCategoricalMotifDictionary> model_;
 };
@@ -208,8 +212,7 @@ struct MotifWindows {
 
 template <typename Result, typename Scorer>
 Result score_motif_window(IObservationSource& source, TemporalCategoricalSplit split,
-                          CodeLimits limits, MotifWindows* windows) {
-    Scorer scorer;
+                          CodeLimits limits, MotifWindows* windows, Scorer scorer = Scorer{}) {
     return score_temporal<Result>(
         source, split, limits, std::min(limits.symbols, categorical_iid_symbol_limit),
         [&](std::span<const TypeId> training, auto& costs) {
@@ -236,9 +239,10 @@ TemporalCategoricalMotifResult score_single_window(IObservationSource& source, T
 }
 
 TemporalCategoricalDictionaryResult score_dictionary_window(
-    IObservationSource& source, TemporalCategoricalSplit split, CodeLimits limits, MotifWindows* windows = nullptr) {
+    IObservationSource& source, TemporalCategoricalSplit split, CodeLimits limits, MotifWindows* windows = nullptr,
+    std::optional<CategoricalMotifAnchor> anchor = std::nullopt) {
     auto result = score_motif_window<TemporalCategoricalDictionaryResult, TemporalDictionaryScorer>(
-        source, split, limits, windows);
+        source, split, limits, windows, TemporalDictionaryScorer{anchor});
     if (result.costs && !result.costs->dictionary) {
         result.reason = "no_training_dictionary";
     }
@@ -272,10 +276,25 @@ MotifWindows permute_independent_frames(const MotifWindows& original, std::size_
     return permuted;
 }
 
-MotifWindows permute_shared_sites(const MotifWindows& original, std::size_t sites, std::uint64_t& seed) {
+MotifWindows permute_shared_sites(const MotifWindows& original, std::size_t sites, std::uint64_t& seed,
+                                  std::optional<CategoricalMotifAnchor> anchor = std::nullopt) {
     std::vector<std::size_t> order(sites);
     std::iota(order.begin(), order.end(), std::size_t{0});
-    shuffle_sites(std::span(order), seed);
+    if (anchor) {
+        std::vector<std::size_t> free;
+        for (std::size_t site = 0; site < sites; ++site) {
+            if (site < anchor->start || site >= anchor->start + anchor->width) {
+                free.push_back(site);
+            }
+        }
+        auto shuffled = free;
+        shuffle_sites(std::span(shuffled), seed);
+        for (std::size_t i = 0; i < free.size(); ++i) {
+            order[free[i]] = shuffled[i];
+        }
+    } else {
+        shuffle_sites(std::span(order), seed);
+    }
     const auto apply = [&](const std::vector<TypeId>& frames) {
         std::vector<TypeId> permuted;
         permuted.reserve(frames.size());
@@ -289,7 +308,9 @@ MotifWindows permute_shared_sites(const MotifWindows& original, std::size_t site
     return {apply(original.training), apply(original.test)};
 }
 
-using PermuteWindow = MotifWindows (*)(const MotifWindows&, std::size_t, std::uint64_t&);
+MotifWindows permute_all_shared_sites(const MotifWindows& window, std::size_t sites, std::uint64_t& seed) {
+    return permute_shared_sites(window, sites, seed);
+}
 
 std::int64_t positive_gain(std::optional<std::int64_t> gain) {
     return std::max<std::int64_t>(0, gain.value_or(0));
@@ -298,7 +319,8 @@ std::int64_t positive_gain(std::optional<std::int64_t> gain) {
 template <typename Result, typename Scorer>
 Result score_motif_permutations(IObservationSource& source, TemporalCategoricalSplit split,
                                 std::size_t count, std::uint64_t seed, CodeLimits limits,
-                                PermuteWindow permute, auto score_window, auto charged_gain) {
+                                auto permute, auto score_window, auto charged_gain,
+                                Scorer fresh = Scorer{}) {
     if (!count || count > temporal_motif_permutation_limit) {
         throw Error(ErrorCode::invalid, "temporal motif permutation draw count is outside its bounds");
     }
@@ -314,7 +336,7 @@ Result score_motif_permutations(IObservationSource& source, TemporalCategoricalS
     bool complete = true;
     for (std::size_t draw = 0; draw < count; ++draw) {
         const auto permuted = permute(windows, split.sites, seed);
-        Scorer scorer;
+        auto scorer = fresh;
         typename decltype(result.observed.costs)::value_type costs;
         try {
             scorer.fit(permuted.training, split.sites, limits, costs);
@@ -365,7 +387,7 @@ TemporalMotifPermutationResult score_categorical_motif_site_permutations(IObserv
                                                                           std::size_t count, std::uint64_t seed,
                                                                           CodeLimits limits) {
     return score_motif_permutations<TemporalMotifPermutationResult, TemporalMotifScorer>(
-        source, split, count, seed, limits, permute_shared_sites,
+        source, split, count, seed, limits, permute_all_shared_sites,
         score_single_window, &TemporalCategoricalMotifCosts::charged_gain_bits);
 }
 
@@ -373,7 +395,25 @@ TemporalDictionaryPermutationResult score_categorical_motif_dictionary_site_perm
     IObservationSource& source, TemporalCategoricalSplit split, std::size_t count,
     std::uint64_t seed, CodeLimits limits) {
     return score_motif_permutations<TemporalDictionaryPermutationResult, TemporalDictionaryScorer>(
-        source, split, count, seed, limits, permute_shared_sites,
-        score_dictionary_window, &TemporalCategoricalDictionaryCosts::charged_gain_vs_first_bits);
+        source, split, count, seed, limits, permute_all_shared_sites,
+        [](auto& observations, auto regions, auto caps, auto* window) {
+            return score_dictionary_window(observations, regions, caps, window);
+        }, &TemporalCategoricalDictionaryCosts::charged_gain_vs_first_bits);
+}
+
+TemporalDictionaryPermutationResult score_categorical_motif_dictionary_anchored_permutations(
+    IObservationSource& source, TemporalCategoricalSplit split, CategoricalMotifAnchor anchor,
+    std::size_t count, std::uint64_t seed, CodeLimits limits) {
+    if (anchor.width < 2 || anchor.width > categorical_motif_max_width || anchor.start > split.sites ||
+        anchor.width > split.sites - anchor.start || split.sites - anchor.width < 2 || split.train_snapshots < 2) {
+        throw Error(ErrorCode::invalid, "invalid motif anchor or too few anchored training frames or movable sites");
+    }
+    return score_motif_permutations<TemporalDictionaryPermutationResult, TemporalDictionaryScorer>(
+        source, split, count, seed, limits,
+        [anchor](const MotifWindows& window, std::size_t sites, std::uint64_t& state) {
+            return permute_shared_sites(window, sites, state, anchor);
+        }, [anchor](auto& observations, auto regions, auto caps, auto* window) {
+            return score_dictionary_window(observations, regions, caps, window, anchor);
+        }, &TemporalCategoricalDictionaryCosts::charged_gain_vs_first_bits, TemporalDictionaryScorer{anchor});
 }
 }

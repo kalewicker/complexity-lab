@@ -89,12 +89,18 @@ private:
     EncodedCategorical model_;
 };
 
+struct CategoricalMotifAnchor {
+    std::size_t start, width;
+};
+
 class FrozenCategoricalMotifDictionary {
 public:
     static std::optional<FrozenCategoricalMotifDictionary> fit(std::span<const TypeId> training,
                                                                CodeLimits limits = {});
     static std::optional<FrozenCategoricalMotifDictionary> fit_frames(std::span<const TypeId> training,
                                                                       std::size_t sites, CodeLimits limits = {});
+    static std::optional<FrozenCategoricalMotifDictionary> fit_anchored_frames(
+        std::span<const TypeId> training, std::size_t sites, CategoricalMotifAnchor anchor, CodeLimits limits = {});
     static FrozenCategoricalMotifDictionary from_bytes(std::span<const std::uint8_t> bytes, std::uint64_t bits,
                                                         CodeLimits limits = {});
 
@@ -108,6 +114,9 @@ public:
                                              std::uint64_t bits, CodeLimits limits = {}) const;
 
 private:
+    static std::optional<FrozenCategoricalMotifDictionary> fit_frames(
+        std::span<const TypeId> training, std::size_t sites, CodeLimits limits,
+        std::optional<CategoricalMotifAnchor> anchor);
     FrozenCategoricalMotifDictionary(std::span<const TypeId> first, std::span<const TypeId> second,
                                      CodeLimits limits);
 

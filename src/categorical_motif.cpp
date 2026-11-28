@@ -111,15 +111,28 @@ struct FrameTrainingComparison {
 };
 
 FrameTrainingComparison compare_training_frames(std::span<const TypeId> training, std::size_t sites,
-                                                 CodeLimits limits) {
+                                                 CodeLimits limits,
+                                                 std::optional<CategoricalMotifAnchor> anchor = std::nullopt) {
     if (!sites || training.empty() || training.size() % sites) {
         throw Error(ErrorCode::invalid, "frozen motif training requires whole nonempty frames");
     }
     check_region(training.size(), limits);
+    std::vector<TypeId> anchored;
+    if (anchor) {
+        if (anchor->width < min_width || anchor->width > max_width || anchor->start > sites ||
+            anchor->width > sites - anchor->start || training.size() / sites < 2) {
+            throw Error(ErrorCode::invalid, "invalid motif anchor or too few anchored training frames");
+        }
+        const auto pattern = training.subspan(anchor->start, anchor->width);
+        anchored.assign(pattern.begin(), pattern.end());
+    }
     FrameTrainingComparison result;
     FrameMatchTable matches;
     for (std::size_t start = 0; start < training.size(); start += sites) {
         const auto frame = training.subspan(start, sites);
+        if (anchor && !std::ranges::equal(anchored, frame.subspan(anchor->start, anchor->width))) {
+            throw Error(ErrorCode::invalid, "motif anchor differs across training frames");
+        }
         const auto baseline = compare_categorical(frame, limits);
         if (!baseline.winner) {
             throw Error(ErrorCode::limit, "incomplete categorical training baseline set");
@@ -128,7 +141,15 @@ FrameTrainingComparison compare_training_frames(std::span<const TypeId> training
         accumulate_frame_matches(matches, scan_motifs(frame), start);
     }
     const auto empty_frame_bits = gamma_bits(sites + 1) + 1 + sites * symbol_bits;
-    result.first = best_frame_motif(matches, empty_frame_bits * (training.size() / sites));
+    const auto empty_bits = empty_frame_bits * (training.size() / sites);
+    if (anchor) {
+        const auto& hit = matches.at(anchored);
+        result.first = FrameMotifCandidate{
+            anchored, empty_bits - hit.saved + gamma_bits(anchored.size()) + anchored.size() * symbol_bits,
+        };
+    } else {
+        result.first = best_frame_motif(matches, empty_bits);
+    }
     return result;
 }
 
@@ -561,7 +582,17 @@ FrozenCategoricalMotifDictionary::fit(std::span<const TypeId> training, CodeLimi
 
 std::optional<FrozenCategoricalMotifDictionary>
 FrozenCategoricalMotifDictionary::fit_frames(std::span<const TypeId> training, std::size_t sites, CodeLimits limits) {
-    const auto comparison = compare_training_frames(training, sites, limits);
+    return fit_frames(training, sites, limits, std::nullopt);
+}
+
+std::optional<FrozenCategoricalMotifDictionary> FrozenCategoricalMotifDictionary::fit_anchored_frames(
+    std::span<const TypeId> training, std::size_t sites, CategoricalMotifAnchor anchor, CodeLimits limits) {
+    return fit_frames(training, sites, limits, anchor);
+}
+
+std::optional<FrozenCategoricalMotifDictionary> FrozenCategoricalMotifDictionary::fit_frames(
+    std::span<const TypeId> training, std::size_t sites, CodeLimits limits, std::optional<CategoricalMotifAnchor> anchor) {
+    const auto comparison = compare_training_frames(training, sites, limits, anchor);
     if (!comparison.first) {
         return std::nullopt;
     }

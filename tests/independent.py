@@ -1932,6 +1932,79 @@ def check_dictionary_site_permutation(args, directory):
     }
 
 
+def check_dictionary_anchored_permutation(args, directory):
+    trace = directory / "categorical-motif-dictionary-anchored-permutation.cltr"
+    mode = "--categorical-motif-dictionary-anchored-permutation"
+    split = (4, 1, 3, 36)
+    anchor = (8, 6)
+    count, seed = 19, 42
+    a, b = list(range(1, 7)), list(range(7, 13))
+    frames = []
+    for i in range(9):
+        nuisance = list(range(100+i*24, 124+i*24))
+        frames.append(a + nuisance[:2] + b + nuisance[2:] + [999])
+    data = write_temporal_steps(trace, frames)
+
+    def evaluate(draws=count, interval=anchor):
+        output = run(args.eval, mode, *split, *interval, draws, seed, trace)
+        return output, next(csv.DictReader(io.StringIO(output)))
+
+    output, row = evaluate()
+    assert None not in row and None not in row.values()
+    assert row["permutation_id"] == "categorical.two_motif_anchored_site_permutation.v1"
+    assert (row["anchor_start"], row["anchor_width"]) == ("8", "6")
+    # The anchored pattern is second in site order. The added pattern starts at zero.
+    assert row["charged_gain_vs_first_bits"] == row["statistic_bits"] == str(3*(192-4)-197)
+    assert row["draws_complete"] == str(count) and row["status"] == "valid"
+
+    scored = [0, 1, 2, 3, 5, 6, 7]
+    free = [*range(8), *range(14, 36)]
+    words = splitmix64_words(seed)
+    expected = []
+    for _ in range(count):
+        order = shuffle_positions(free, words)
+        surrogate = [frame[:] for frame in frames]
+        for i in scored:
+            for target, source in zip(free, order):
+                surrogate[i][target] = frames[i][source]
+            assert surrogate[i][8:14] == frames[i][8:14]
+        assert Counter(tuple(surrogate[i][j] for i in scored) for j in free) == Counter(
+            tuple(frames[i][j] for i in scored) for j in free)
+        write_temporal_steps(trace, surrogate)
+        _, replay = evaluate(draws=1)
+        assert replay["status"] == "valid"
+        expected.append(replay["charged_gain_vs_first_bits"] or "absent")
+    assert len(set(expected)) > 1 and row["draw_gains_bits"].split() == expected
+    extreme = sum(gain != "absent" and int(gain) >= int(row["statistic_bits"]) for gain in expected)
+    assert (int(row["p_numerator"]), int(row["p_denominator"])) == (extreme+1, count+1)
+    assert int(row["draws_no_training_dictionary"]) == expected.count("absent")
+
+    control = [frame[:] for frame in frames]
+    control[4] = [77] * 37
+    control[-1] = [88] * 37
+    write_temporal_steps(trace, control)
+    assert evaluate()[0] == output
+    for i in scored[4:]:
+        control[i][:6] = a[::-1]
+    write_temporal_steps(trace, control)
+    _, negative = evaluate()
+    assert (negative["first_occurrences"], negative["second_occurrences"]) == ("3", "0")
+    assert negative["charged_gain_vs_first_bits"] == "-200"
+    assert negative["statistic_bits"] == "0" and negative["p_numerator"] == negative["p_denominator"] == "20"
+    for interval in ((8, 1), (35, 6), (2**64-1, 2)):
+        assert not run(args.eval, mode, *split, *interval, count, seed, trace, code=1)
+    control[1][8], control[1][9] = control[1][9], control[1][8]
+    write_temporal_steps(trace, control)
+    assert not run(args.eval, mode, *split, *anchor, count, seed, trace, code=1)
+    return {
+        "trace_sha256": hashlib.sha256(data).hexdigest(),
+        "csv_sha256": hashlib.sha256(output.encode()).hexdigest(),
+        "charged_gain_bits": int(row["charged_gain_vs_first_bits"]),
+        "rank": [extreme+1, count+1],
+        "control_charged_gain_bits": int(negative["charged_gain_vs_first_bits"]),
+    }
+
+
 def check_motif_calibration_runner(args, directory):
     from calibrate_motifs import roster, upper_bound_millionths
 
@@ -2480,6 +2553,7 @@ def check(args, directory):
         "categorical_motif_permutation": check_categorical_motif_permutation(args, directory),
         "categorical_motif_site_permutation": check_categorical_motif_site_permutation(args, directory),
         "dictionary_site_permutation": check_dictionary_site_permutation(args, directory),
+        "dictionary_anchored_permutation": check_dictionary_anchored_permutation(args, directory),
         "motif_calibration_runner": check_motif_calibration_runner(args, directory),
         "site_calibration_runner": check_site_calibration_runner(args, directory),
         "dictionary_calibration_runner": check_dictionary_calibration_runner(args, directory),

@@ -52,6 +52,7 @@ int usage() {
               << "       clab-eval --categorical-motif-dictionary-heldout TRAIN GUARD TEST TRACE.cltr\n"
               << "       clab-eval --categorical-motif-dictionary-temporal TRAIN GUARD TEST SITES TRACE.cltr\n"
               << "       clab-eval --categorical-motif-dictionary-site-permutation TRAIN GUARD TEST SITES DRAWS SEED TRACE.cltr\n"
+              << "       clab-eval --categorical-motif-dictionary-anchored-permutation TRAIN GUARD TEST SITES ANCHOR_START ANCHOR_WIDTH DRAWS SEED TRACE.cltr\n"
               << "       clab-eval --categorical-heldout TRAIN GUARD TEST TRACE.cltr\n"
               << "       clab-eval --categorical-motif-temporal TRAIN GUARD TEST SITES TRACE.cltr\n"
               << "       clab-eval --categorical-motif-permutation TRAIN GUARD TEST SITES DRAWS SEED TRACE.cltr\n"
@@ -516,6 +517,7 @@ struct PermutationOptions {
     std::size_t count;
     std::uint64_t seed;
     bool shared_sites;
+    std::optional<clab::CategoricalMotifAnchor> anchor;
 };
 
 void append_permutation_columns(std::string& columns, std::string_view absence_column) {
@@ -560,13 +562,23 @@ void write_permutation_costs(std::ostream& out, const Result& result, Permutatio
 
 void report_dictionary_temporal(clab::TraceReader& trace, std::ostream& out, clab::TemporalCategoricalSplit split,
                                 std::optional<PermutationOptions> options) {
-    const auto evaluation = options
-        ? clab::score_categorical_motif_dictionary_site_permutations(trace, split, options->count, options->seed)
-        : clab::TemporalDictionaryPermutationResult{
+    const auto evaluation = [&] {
+        if (options && options->anchor) {
+            return clab::score_categorical_motif_dictionary_anchored_permutations(
+                trace, split, *options->anchor, options->count, options->seed);
+        }
+        if (options) {
+            return clab::score_categorical_motif_dictionary_site_permutations(trace, split, options->count, options->seed);
+        }
+        return clab::TemporalDictionaryPermutationResult{
             clab::score_categorical_motif_dictionary_temporal(trace, split), {}, {}};
+    }();
     const auto& result = evaluation.observed;
     std::string columns(dictionary_cost_columns);
     if (options) {
+        if (options->anchor) {
+            columns += ",anchor_start,anchor_width";
+        }
         append_permutation_columns(columns, "draws_no_training_dictionary");
     }
     write_temporal_prefix(out, trace.metadata(), split, result, clab::categorical_frozen_dictionary_code_id, columns);
@@ -584,7 +596,12 @@ void report_dictionary_temporal(clab::TraceReader& trace, std::ostream& out, cla
         out << ",,,,,,,,,,,,,,";
     }
     if (options) {
-        write_permutation_costs(out, evaluation, *options, clab::temporal_dictionary_site_permutation_id,
+        if (const auto& anchor = options->anchor) {
+            out << ',' << anchor->start << ',' << anchor->width;
+        }
+        const auto id = options->anchor ? clab::temporal_dictionary_anchored_permutation_id
+                                        : clab::temporal_dictionary_site_permutation_id;
+        write_permutation_costs(out, evaluation, *options, id,
                                 &clab::TemporalCategoricalDictionaryCosts::charged_gain_vs_first_bits);
     }
     out << ',' << status_name(result.status) << ',' << result.reason << '\n';
@@ -649,13 +666,15 @@ int main(int argc, char** argv) {
             }
             return 0;
         }
-        const bool dictionary_permutation = mode == "--categorical-motif-dictionary-site-permutation";
+        const bool anchored = mode == "--categorical-motif-dictionary-anchored-permutation";
+        const bool dictionary_permutation = mode == "--categorical-motif-dictionary-site-permutation" || anchored;
         const bool shared_site_permutation = mode == "--categorical-motif-site-permutation" || dictionary_permutation;
         const bool permutation = shared_site_permutation || mode == "--categorical-motif-permutation";
         const bool dictionary_temporal = mode == "--categorical-motif-dictionary-temporal" || dictionary_permutation;
         if (mode == "--categorical-temporal" || mode == "--categorical-motif-temporal" ||
             dictionary_temporal || permutation) {
-            if (argc != (permutation ? 9 : 7)) {
+            const int draw_arg = anchored ? 8 : 6;
+            if (argc != (permutation ? draw_arg + 3 : 7)) {
                 return usage();
             }
             const auto train = parse_unsigned(argv[2]), guard = parse_unsigned(argv[3]);
@@ -666,15 +685,23 @@ int main(int argc, char** argv) {
             }
             std::optional<PermutationOptions> options;
             if (permutation) {
-                const auto draws = parse_unsigned(argv[6]);
-                const auto seed = parse_unsigned<std::uint64_t>(argv[7]);
+                const auto draws = parse_unsigned(argv[draw_arg]);
+                const auto seed = parse_unsigned<std::uint64_t>(argv[draw_arg + 1]);
                 if (!draws.value_or(0) || *draws > clab::temporal_motif_permutation_limit || !seed) {
                     std::cerr << "clab-eval: invalid permutation draw count or seed\n";
                     return 2;
                 }
-                options = PermutationOptions{*draws, *seed, shared_site_permutation};
+                options = PermutationOptions{*draws, *seed, shared_site_permutation, std::nullopt};
+                if (anchored) {
+                    const auto start = parse_unsigned(argv[6]), width = parse_unsigned(argv[7]);
+                    if (!start || !width) {
+                        std::cerr << "clab-eval: invalid motif anchor start or width\n";
+                        return 2;
+                    }
+                    options->anchor = clab::CategoricalMotifAnchor{*start, *width};
+                }
             }
-            clab::TraceReader trace(argv[permutation ? 8 : 6]);
+            clab::TraceReader trace(argv[permutation ? draw_arg + 2 : 6]);
             const clab::TemporalCategoricalSplit split{*train, *guard, *test, *sites};
             if (dictionary_temporal) {
                 report_dictionary_temporal(trace, out, split, options);

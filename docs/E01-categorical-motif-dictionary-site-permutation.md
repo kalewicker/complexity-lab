@@ -6,7 +6,7 @@ The statistic is the positive part of the charged gain against the first entry a
 
 The [registered engineering check](../protocols/E01-categorical-motif-dictionary-site-permutation.json) uses the same Fisher–Yates shuffle, SplitMix64 stream, and 1–199 draw limit as the [one-entry shared-site test](E01-categorical-motif-site-permutation.md). The exact rank is `(1 + number of draw statistics at least as large as observed) / (DRAWS + 1)`, including ties. The report names the method `categorical.two_motif_shared_site_permutation.v1`. The `draw_gains_bits` field retains the signed marginal gain for each draw, `absent` for a completed draw without a pair, and `budget_exceeded` for a failed draw. Any failed draw leaves the rank blank. Missing observed data starts zero draws.
 
-Inference requires joint exchangeability of whole site histories. Both spatial patterns can change under permutation because the training procedure runs afresh on every draw. A null that conditions on a prespecified spatial first motif would require its own design and validation.
+Inference requires joint exchangeability of whole site histories. Both spatial patterns can change under permutation because the training procedure runs afresh on every draw. The [anchored variant](E01-categorical-motif-dictionary-anchored-permutation.md) fixes a prespecified first motif and permutes the remaining histories.
 
 ## Verification
 

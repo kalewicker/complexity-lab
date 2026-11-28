@@ -1,0 +1,9 @@
+{
+  "protocol": "E01-categorical-motif-dictionary-anchored-permutation-v1",
+  "scope": "conditional test of the second entry given the histories at a prespecified contiguous first-motif interval",
+  "anchor": "zero-based interval entirely within the scored site prefix, width 2–6, at least two other sites; the same anchored pattern must appear in each of at least two training frames",
+  "surrogate": "hold anchor histories at their original positions; shuffle remaining histories with one shared Fisher–Yates site order across scored training and test prefixes",
+  "pipeline": "force the first definition to the anchored training pattern, place it with the existing leftmost rule, refit the second entry and Huffman on each draw, and keep the strict training gate",
+  "statistic": "positive part of the pair's charged gain against the anchored first entry; a completed no-pair draw contributes zero; ties and failed-draw policy follow the shared-site test",
+  "limits": "engineering fixtures; inference requires joint exchangeability of the unanchored histories conditional on the fixed histories and the prespecified anchor"
+}
