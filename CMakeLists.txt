@@ -40,7 +40,7 @@ function(clab_library name)
 endfunction()
 
 clab_library(foundation src/foundation.cpp)
-clab_library(observation src/observation.cpp)
+clab_library(observation src/observation.cpp src/lattice_view.cpp)
 target_link_libraries(observation PUBLIC foundation)
 clab_library(trace src/trace.cpp)
 target_link_libraries(trace PUBLIC observation)
@@ -87,6 +87,7 @@ install(FILES docs/cltr-v1.md docs/G0-closeout.md docs/E01-categorical-codes.md
     docs/E01-categorical-motif-dictionary-site-calibration.md
     docs/E01-categorical-motif-dictionary-anchored-permutation.md
     docs/E01-categorical-motif-dictionary-anchored-calibration.md
+    docs/E01-F12-rectangular-lattice.md
     DESTINATION "${CMAKE_INSTALL_DOCDIR}")
 install(EXPORT CLabTargets NAMESPACE clab:: DESTINATION "${CMAKE_INSTALL_LIBDIR}/cmake/CLab")
 configure_package_config_file(cmake/CLabConfig.cmake.in
@@ -100,7 +101,7 @@ install(FILES "${CMAKE_CURRENT_BINARY_DIR}/CLabConfig.cmake"
 
 if(BUILD_TESTING)
     find_package(Python3 REQUIRED COMPONENTS Interpreter)
-    add_executable(clab-tests tests/core.cpp)
+    add_executable(clab-tests tests/core.cpp tests/lattice_view.cpp)
     target_link_libraries(clab-tests PRIVATE trace evaluator)
     if(CLAB_BUILD_SUBSTRATES)
         target_link_libraries(clab-tests PRIVATE substrate_api)

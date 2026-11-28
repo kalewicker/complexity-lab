@@ -72,6 +72,7 @@ For attributed relational traces, `clab-inspect --metadata` lists the schema and
 - [Tier-0 structural fixture checks](docs/E01-tier0-fixtures.md)
 - [G1 evaluator validation status](docs/G1-status.md)
 - [F11 categorical label invariance](docs/E01-F11-categorical-relabeling.md)
+- [F12 common view for rectangular lattices](docs/E01-F12-rectangular-lattice.md)
 - [Typed trace provenance verification](docs/E00-provenance-results.md)
 - [Relational attribute verification](docs/E00-attributes-results.md)
 - [Tier-0 metric registry verification](docs/E01-registry-results.md)

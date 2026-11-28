@@ -19,6 +19,8 @@
 #include <tuple>
 #include <utility>
 
+void lattice_view_fixtures(const std::filesystem::path& directory);
+
 namespace {
 void require(bool ok, const char* description) {
     if (!ok) {
@@ -1082,6 +1084,7 @@ int main() {
         TempDirectory temp;
         round_trips(temp.path);
         relational_round_trip(temp.path);
+        lattice_view_fixtures(temp.path);
         temporal_round_trip(temp.path);
         provenance_round_trip(temp.path);
         attribute_round_trip(temp.path);

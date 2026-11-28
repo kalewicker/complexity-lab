@@ -1,0 +1,29 @@
+{
+  "protocol": "E01-F12-rectangular-lattice-v1",
+  "scope": "engineering equivalence of categorical observations with declared rectangular geometry",
+  "geometry": {
+    "boundary": "open",
+    "neighbors": "horizontal and vertical nearest neighbors",
+    "site_order": "explicit row-major entity ID list for each relational representation",
+    "state": "native u32 symbol or relational entity type",
+    "edge_schema": "type 0, unordered arity 2, both roles 0, one relation per undirected edge",
+    "attributes": "absent"
+  },
+  "fixture": {
+    "dimensions": [2, 6],
+    "frames": 7,
+    "representations": ["dense categorical", "graph incidence", "arity-two hypergraph incidence"],
+    "variation": "different IDs, entity order, edge order, and endpoint order in the relational traces",
+    "split": {"train": 4, "guard": 1, "test": 2, "sites": 12}
+  },
+  "decision": {
+    "projection": "identical row-major symbols at each frame and identical common CLTR bytes under shared output metadata",
+    "scores": "identical exact categorical baseline and frozen two-entry temporal scoring, with both motifs used",
+    "negative_controls": [
+      "invalid or incomplete site map", "mismatched rectangle dimensions", "missing or duplicate edge",
+      "row wrapping or diagonal edge", "loop", "nonbinary or directed relation", "different relation type or port role",
+      "attributed snapshot"
+    ]
+  },
+  "limits": "known coordinates, fixed geometry and existing CLTR channels; no graph layout inference or engine comparison"
+}

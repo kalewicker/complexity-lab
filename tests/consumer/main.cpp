@@ -4,6 +4,7 @@
 #include <clab/categorical_temporal.hpp>
 #include <clab/evaluator.hpp>
 #include <clab/histogram_cache.hpp>
+#include <clab/lattice_view.hpp>
 #include <clab/trace.hpp>
 
 #include <algorithm>
@@ -24,6 +25,15 @@ int main(int argc, char** argv) {
         return 1;
     }
     const std::array<clab::TypeId, 3> witness{11, 19, 11};
+    const clab::RelationalSnapshot lattice(
+        std::array<clab::EntityRow, 2>{{{20, 19}, {10, 11}}},
+        std::array<clab::RelationRow, 1>{{{1, 0, 0, 2, false}}},
+        std::array<clab::PortRow, 2>{{{20, 0}, {10, 0}}});
+    const auto lattice_view = clab::categorical_lattice_view(
+        lattice, 1, 2, std::array<clab::EntityId, 2>{10, 20});
+    if (!std::ranges::equal(lattice_view.symbols(), std::array<clab::TypeId, 2>{11, 19})) {
+        return 1;
+    }
     const auto encoded = clab::encode_categorical(witness, clab::CategoricalCode::periodic);
     if (clab::decode_categorical(encoded.bytes, encoded.length.total_bits()) !=
         std::vector<clab::TypeId>(witness.begin(), witness.end())) {
