@@ -2101,6 +2101,86 @@ def check_site_calibration_runner(args, directory):
     }
 
 
+def check_dictionary_calibration_runner(args, directory):
+    from calibrate_motifs import DICTIONARY_PROTOCOL, FRAME_PROTOCOL, SITE_PROTOCOL, roster
+
+    script = Path(__file__).resolve().parents[1] / "scripts/calibrate_motifs.py"
+    selector = ("--protocol", "dictionary-shared-site")
+    archive = directory / "dictionary-calibration-smoke"
+    smoke = json.loads(run(sys.executable, script, *selector, "smoke", "--eval", args.eval, "--out", archive))
+    assert smoke == json.loads(run(sys.executable, script, "audit", archive))
+    assert not run(sys.executable, script, "--protocol", "shared-site", "audit", archive, code=1)
+    assert "bounds" not in smoke
+    design = smoke["design"]
+    assert (design["worlds_per_stratum"], design["draws_per_world"], design["minimum_rank"],
+            design["maximum_possible_false_positives"], design["minimum_detected_plants"]) == (
+        350, 99, "1/100", 23, 295,
+    )
+    rows = smoke["outcomes"]
+    assert [row["rank"] for row in rows] == [[14, 100], [53, 100], [1, 100], [1, 100]]
+    digests = []
+    for row in rows:
+        world = archive / row["id"]
+        trace = (world / "trace.cltr").read_bytes()
+        digests.append(hashlib.sha256(trace).hexdigest())
+        size, = struct.unpack_from("<I", trace, 12)
+        frames = [struct.unpack_from("<36I", trace, 16+size+44+i*(44+144)) for i in range(8)]
+        for i, frame in enumerate(frames):
+            assert sorted(frame) == [*range(1, 13), *range(100+i*24, 124+i*24)]
+        positions = [frames[0].index(label) for label in range(1, 13)]
+        assert all(frame[site] == label for frame in frames for label, site in enumerate(positions, 1))
+        if row["stratum"] == "planted_order":
+            for block in (positions[:6], positions[6:]):
+                assert block == list(range(block[0], block[0]+6))
+            assert abs(positions[0] - positions[6]) > 6
+        receipt = json.loads((world / "receipt.json").read_text())
+        score, = csv.DictReader(io.StringIO(receipt["stdout"]))
+        assert score["permutation_id"] == "categorical.two_motif_shared_site_permutation.v1"
+        assert score["draws_complete"] == "99"
+        gains = score["draw_gains_bits"].split()
+        assert len(gains) == 99 and gains.count("absent") == int(score["draws_no_training_dictionary"])
+        observed = max(0, int(score["charged_gain_vs_first_bits"] or 0))
+        assert int(score["statistic_bits"]) == observed
+        assert row["rank"][0] == 1 + sum((0 if gain == "absent" else max(0, int(gain))) >= observed
+                                        for gain in gains)
+
+    reserved = list(roster("run", DICTIONARY_PROTOCOL))
+    all_slots = reserved + rows + [slot for protocol in (FRAME_PROTOCOL, SITE_PROTOCOL)
+                                   for mode in ("run", "smoke") for slot in roster(mode, protocol)]
+    assert len(reserved) == 700
+    assert all(len({slot[key] for slot in all_slots}) == len(all_slots) for key in ("input_seed", "permutation_seed"))
+    manifest = json.loads((archive / "manifest.json").read_text())
+    empty = directory / "dictionary-calibration-empty"
+    empty.mkdir()
+    (empty / "clab-eval").hardlink_to(archive / "clab-eval")
+    (empty / "manifest.json").write_text(json.dumps(manifest | {"mode": "run", "slots": reserved}))
+    inactive = json.loads(run(sys.executable, script, "audit", empty))
+    assert all(stratum["unstarted"] == 350 for stratum in inactive["strata"].values())
+    assert inactive["bounds"]["possible_false_positives"] == 350
+    assert inactive["bounds"]["detected_plants"] == 0
+    assert not inactive["bounds"]["false_positive_pass"] and not inactive["bounds"]["sensitivity_pass"]
+
+    # A receipt with valid Huffman costs and an invalid first-entry comparison is unresolved.
+    tampered = archive / rows[-1]["id"] / "receipt.json"
+    receipt = json.loads(tampered.read_text())
+    score, = csv.DictReader(io.StringIO(receipt["stdout"]))
+    score["first_test_bits"] = str(int(score["first_test_bits"]) + 1)
+    buffer = io.StringIO()
+    writer = csv.DictWriter(buffer, fieldnames=list(score))
+    writer.writeheader()
+    writer.writerow(score)
+    receipt["stdout"] = buffer.getvalue()
+    tampered.write_text(json.dumps(receipt))
+    amended = json.loads(run(sys.executable, script, "audit", archive))["outcomes"][-1]
+    assert amended["status"] == "unresolved" and amended["reason"] == "observed gain does not reconcile with recorded costs"
+    return {
+        "protocol_sha256": design["protocol_sha256"],
+        "smoke_trace_sha256": digests,
+        "smoke_ranks": [row["rank"] for row in rows],
+        "unstarted_full_panel": len(reserved),
+    }
+
+
 def check_categorical_motif(args, directory):
     def gamma(value):
         binary = f"{value:b}"
@@ -2402,6 +2482,7 @@ def check(args, directory):
         "dictionary_site_permutation": check_dictionary_site_permutation(args, directory),
         "motif_calibration_runner": check_motif_calibration_runner(args, directory),
         "site_calibration_runner": check_site_calibration_runner(args, directory),
+        "dictionary_calibration_runner": check_dictionary_calibration_runner(args, directory),
     }
     assert result["categorical_sha256"] == "3dda44df0c60342ddd2b6456bbb350ea66a50141d86dc62ba4e887a0000fc9ba"
     assert result["events_sha256"] == "5f5e31d67be90e5eea677c262b01358df9cc2427ff86a17d975c44f4d34ddac1"

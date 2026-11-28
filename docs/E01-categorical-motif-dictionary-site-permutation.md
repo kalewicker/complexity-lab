@@ -19,4 +19,4 @@ The first-entry-only control lost 199 bits by retaining the second definition. A
 | CLTR fixture | `8dfe3f16fdd14a2b8d381b23cc716d2aff4b68e2d9fe826f6d074d269a26f817` |
 | CSV report | `369249365f5983a4d24a62d69cabec129b2319d091e9e7f8698b49728bf3123f` |
 
-The fixtures verify the test and its accounting. Population calibration for the marginal statistic remains open.
+The fixtures verify the test and its accounting. The [registered population design](E01-categorical-motif-dictionary-site-calibration.md) fixes the error and sensitivity check for this statistic.

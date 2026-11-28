@@ -45,7 +45,13 @@ def load_protocol(filename, command, shared_sites=False):
 FRAME_PROTOCOL = load_protocol("E01-categorical-motif-calibration.json", "--categorical-motif-permutation")
 SITE_PROTOCOL = load_protocol("E01-categorical-motif-site-calibration.json",
                               "--categorical-motif-site-permutation", shared_sites=True)
-PROTOCOLS = {"independent-frame": FRAME_PROTOCOL, "shared-site": SITE_PROTOCOL}
+DICTIONARY_PROTOCOL = load_protocol("E01-categorical-motif-dictionary-site-calibration.json",
+                                    "--categorical-motif-dictionary-site-permutation", shared_sites=True)
+PROTOCOLS = {
+    "independent-frame": FRAME_PROTOCOL,
+    "shared-site": SITE_PROTOCOL,
+    "dictionary-shared-site": DICTIONARY_PROTOCOL,
+}
 
 
 def binomial_cdf(n, k, rate):
@@ -145,14 +151,37 @@ def shared_site_order(rng, sites, persistent, planted):
     return nuisance_sites[:offset] + list(range(persistent)) + nuisance_sites[offset:]
 
 
+def separated_block_order(rng, sites, first_width, second_width):
+    starts = [
+        (first, second)
+        for first in range(sites - first_width + 1)
+        for second in range(sites - second_width + 1)
+        if first + first_width < second or second + second_width < first
+    ]
+    first, second = starts[rng.below(len(starts))]
+    persistent = first_width + second_width
+    nuisance = list(range(persistent, sites))
+    rng.shuffle(nuisance)
+    order = [None] * sites
+    order[first:first + first_width] = range(first_width)
+    order[second:second + second_width] = range(first_width, persistent)
+    remaining = iter(nuisance)
+    return [next(remaining) if index is None else index for index in order]
+
+
 def world_trace(slot, protocol=FRAME_PROTOCOL):
     train, guard, test, sites = protocol.split
     population = protocol.data["population"]
-    motif = population["motif"]
+    blocks = population.get("motifs")
+    motif = [label for block in blocks for label in block] if blocks else population["motif"]
     width = sites - len(motif)
     rng = FrameRandom(slot["input_seed"])
     planted = slot["stratum"] == protocol.strata[1]
-    order = shared_site_order(rng, sites, len(motif), planted) if protocol.shared_sites else None
+    order = None
+    if blocks and planted:
+        order = separated_block_order(rng, sites, *map(len, blocks))
+    elif protocol.shared_sites:
+        order = shared_site_order(rng, sites, len(motif), planted)
     data = bytearray(header(META | {"run_id": slot["id"]}))
     for i in range(train + guard + test):
         start = population["nuisance_label_start"] + width * i
@@ -216,17 +245,20 @@ def checked_rank(csv_text, slot, protocol):
             or row["status"] != "valid" or int(row["draws_requested"]) != draw_count
             or int(row["draws_complete"]) != draw_count or int(row["draws_budget_exceeded"]) != 0):
         raise ValueError("evaluator did not complete the planned permutation split")
-    gain = row["charged_gain_bits"]
-    if row["reason"] != ("" if gain else "no_training_motif"):
+    first_entry = protocol.data["decision"].get("comparator") == "first_entry"
+    gain = row["charged_gain_vs_first_bits" if first_entry else "charged_gain_bits"]
+    absence = "no_training_dictionary" if first_entry else "no_training_motif"
+    if row["reason"] != ("" if gain else absence):
         raise ValueError("observed motif status is inconsistent")
     if gain:
-        baseline = int(row["baseline_model_bits"]) + int(row["baseline_test_bits"])
+        comparator = "first" if first_entry else "baseline"
+        baseline = int(row[f"{comparator}_model_bits"]) + int(row[f"{comparator}_test_bits"])
         coded = int(row["model_bits"]) + int(row["test_bits"])
         if baseline - coded != int(gain):
             raise ValueError("observed gain does not reconcile with recorded costs")
     observed = max(0, int(gain)) if gain else 0
     draws = row["draw_gains_bits"].split()
-    if len(draws) != draw_count or draws.count("absent") != int(row["draws_no_training_motif"]):
+    if len(draws) != draw_count or draws.count("absent") != int(row[f"draws_{absence}"]):
         raise ValueError("draw accounting is inconsistent")
     extreme = sum((0 if token == "absent" else max(0, int(token))) >= observed for token in draws)
     numerator, denominator = int(row["p_numerator"]), int(row["p_denominator"])
