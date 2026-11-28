@@ -1,0 +1,32 @@
+{
+  "protocol": "E01-F11-categorical-relabeling-v1",
+  "scope": "deterministic categorical representation checks on fixed snapshots and site histories",
+  "relabelings_modulo_2_to_32": [
+    "0xffffffff - x",
+    "x xor 0x80000000",
+    "(x - 1) * 0x9e3779b1"
+  ],
+  "cli_panel": {
+    "fixtures": [
+      "two persistent motifs and fresh nuisance labels, using the existing anchored permutation fixture",
+      "globally unique labels in five frames, with no eligible training motif and unseen test labels"
+    ],
+    "modes": [
+      "categorical-baselines", "categorical-iid", "categorical-compare",
+      "categorical-motif", "categorical-motif-dictionary",
+      "categorical-temporal", "categorical-motif-temporal", "categorical-motif-dictionary-temporal",
+      "categorical-motif-permutation", "categorical-motif-site-permutation",
+      "categorical-motif-dictionary-site-permutation", "categorical-motif-dictionary-anchored-permutation"
+    ],
+    "anchor": "anchored mode on the persistent fixture only, starting at site 8 with width 6",
+    "permutation_draws": 19,
+    "permutation_seed": 42,
+    "acceptance": "exact CSV equality for every mode and relabeling, including statuses, costs and every permutation draw"
+  },
+  "model_panel": {
+    "fixtures": ["existing tied single candidate", "existing interleaved two-entry fit",
+                 "existing frame-aware tied two-entry fit"],
+    "acceptance": "the patterns change by the prescribed bijection in the same entry order, and model length, placement coordinates and test bit costs agree exactly where exposed"
+  },
+  "limits": "label bijections only, with identical site and frame order; byte-level diagnostics and cross-representation comparisons are outside this panel"
+}

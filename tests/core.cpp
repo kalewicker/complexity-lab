@@ -15,6 +15,7 @@
 #include <unistd.h>
 #include <filesystem>
 #include <iostream>
+#include <iterator>
 #include <tuple>
 #include <utility>
 
@@ -957,6 +958,71 @@ void temporal_dictionary_fixtures(const std::filesystem::path& directory) {
             "temporal dictionary must keep placements inside individual test frames");
 }
 
+void categorical_relabeling_fixtures() {
+    using Label = clab::TypeId;
+    using Rename = Label (*)(Label);
+    const std::array<Rename, 3> maps{
+        [](Label x) -> Label { return 0xffffffffu - x; },
+        [](Label x) -> Label { return x ^ 0x80000000u; },
+        [](Label x) -> Label { return (x - 1u) * 0x9e3779b1u; },
+    };
+    const std::vector<Label> tied{9, 9, 1, 9, 1, 9};
+    const std::vector<Label> interleaved{1, 2, 9, 3, 4, 8, 1, 2, 7, 3, 4, 6};
+    const std::vector<Label> a{1, 2, 3, 4, 5, 6}, b{1, 3, 5, 2, 4, 6};
+    std::vector<Label> training, probe;
+    for (const auto* frame : {&a, &a, &b, &b}) {
+        training.insert(training.end(), frame->begin(), frame->end());
+    }
+    for (const auto* frame : {&a, &b}) {
+        probe.insert(probe.end(), frame->begin(), frame->end());
+    }
+
+    const auto motif = clab::compare_categorical_motif(tied);
+    const auto pair = clab::compare_categorical_motif_dictionary(interleaved);
+    const auto fitted = clab::FrozenCategoricalMotifDictionary::fit_frames(training, a.size());
+    require(motif.motif && motif.motif->pattern == std::vector<Label>{9, 1} &&
+            pair.selects_dictionary() && fitted, "categorical relabeling reference fixtures");
+    const auto encoded = fitted->encode(probe);
+    require(encoded.entries[0].pattern == a && encoded.entries[1].pattern == b,
+            "frame-aware tie uses first training position");
+    for (const auto rename : maps) {
+        const auto map_labels = [rename](const std::vector<Label>& labels) {
+            std::vector<Label> result;
+            std::ranges::transform(labels, std::back_inserter(result), rename);
+            return result;
+        };
+        const auto renamed_motif = clab::compare_categorical_motif(map_labels(tied));
+        require(renamed_motif.motif && renamed_motif.motif->pattern == map_labels(motif.motif->pattern) &&
+                renamed_motif.motif->placements == motif.motif->placements &&
+                renamed_motif.motif->encoded.length == motif.motif->encoded.length,
+                "relabeling changed the tied single motif selection");
+
+        const auto renamed_pair = clab::compare_categorical_motif_dictionary(map_labels(interleaved));
+        require(renamed_pair.selects_dictionary() &&
+                renamed_pair.dictionary->encoded.length == pair.dictionary->encoded.length,
+                "relabeling changed two-entry snapshot admission or code length");
+        for (std::size_t i = 0; i < pair.dictionary->entries.size(); ++i) {
+            const auto& original = pair.dictionary->entries[i];
+            const auto& entry = renamed_pair.dictionary->entries[i];
+            require(entry.pattern == map_labels(original.pattern) && entry.placements == original.placements,
+                    "relabeling changed snapshot dictionary entries");
+        }
+
+        const auto renamed_fit = clab::FrozenCategoricalMotifDictionary::fit_frames(map_labels(training), a.size());
+        require(renamed_fit && renamed_fit->model_code().length == fitted->model_code().length,
+                "relabeling changed frozen dictionary admission or definition cost");
+        const auto renamed_frame = renamed_fit->encode(map_labels(probe));
+        require(renamed_frame.encoded.length == encoded.encoded.length &&
+                renamed_frame.placement_bits == encoded.placement_bits,
+                "relabeling changed frozen dictionary test costs");
+        for (std::size_t i = 0; i < encoded.entries.size(); ++i) {
+            require(renamed_frame.entries[i].pattern == map_labels(encoded.entries[i].pattern) &&
+                    renamed_frame.entries[i].placements == encoded.entries[i].placements,
+                    "relabeling changed frozen dictionary entries");
+        }
+    }
+}
+
 void temporal_permutation_budget(const std::filesystem::path& directory) {
     const auto path = directory / "permutation-budget.cltr";
     std::array<clab::TypeId, 64> labels{};
@@ -1027,6 +1093,7 @@ int main() {
         categorical_comparison_fixtures();
         categorical_motif_fixtures();
         categorical_dictionary_fixtures();
+        categorical_relabeling_fixtures();
         frozen_motif_fixtures();
         categorical_heldout_fixtures();
         temporal_categorical_fixtures(temp.path);

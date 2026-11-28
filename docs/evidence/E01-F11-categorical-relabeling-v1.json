@@ -1,0 +1,45 @@
+{
+  "persistent": {
+    "csv_sha256_by_mode": {
+      "baselines": "f9937ba1e99f68bbd1f31d55608054c39ec8fabb3f6eb4b12f80353e98ae051d",
+      "compare": "7d72d780c0473676567d16d703cc16512b0867c29e8438a4512b8891bd3668f1",
+      "iid": "f525e7dd644c72260e251fc842de9da8fdb2604ef571ec26240b737ea23cd5f9",
+      "motif": "415a09d0bcf6d476be92e2b72d2a88722ac8131e8f0443e78d0136c7a81c0bfb",
+      "motif-dictionary": "d83e00e1ac3891e214bc0253d2be37018fd9deaa4ffaec9b8c580e7ec223ec80",
+      "motif-dictionary-anchored-permutation": "f5ab7b5b4622eec6c28f04beb102608911d3e4b95e93540cae135e66b7ac63b8",
+      "motif-dictionary-site-permutation": "369249365f5983a4d24a62d69cabec129b2319d091e9e7f8698b49728bf3123f",
+      "motif-dictionary-temporal": "5d5dce26a93062a70cdcb06502d360db70bd3c51239c8cabb4e5084371562cea",
+      "motif-permutation": "5e601106ec4e4f37a95b45eb68c74cc788bf15283b2ae5dfdcd0f1ba7443b81c",
+      "motif-site-permutation": "b238363602928417b8eceed8fe2c3acfa995567b1beec9c47c044fa86ef0ddb8",
+      "motif-temporal": "16323e42ce462ec74a1c05589691ba2a5d9ad961532d6defe79dee2aeb4faaf2",
+      "temporal": "d29d8e65b1b1c2c6638aa9639800dcbce4b2ab0bd3121dbc7dffc76d9e582328"
+    },
+    "relabeled_sha256": [
+      "4a68f2c1e96b1f60590e8cd161bf160e78a7f00de913e2f8fd4500dad1a5fc72",
+      "e24af6ed217057d232d5b1e52b7f59d09f6dd24d0fa50b92d2e88621f3b89a46",
+      "c8c8cbb4a4a8234f375231ee23947a4c1145ea72b99950482361a6cb3bb4ca39"
+    ],
+    "trace_sha256": "8dfe3f16fdd14a2b8d381b23cc716d2aff4b68e2d9fe826f6d074d269a26f817"
+  },
+  "unique": {
+    "csv_sha256_by_mode": {
+      "baselines": "ba93beac269e1612d33abd3ee1aaef1dc086c2cedb3635c518acb858dde2f0f2",
+      "compare": "50e3b68f21a5c641156ec59c2cfefb2e7a848df3df8947795f8397fead0ef3c2",
+      "iid": "0455bd10477eae0a607dc162c96000f3a2a78d89ae5c93507dbb250694fe2961",
+      "motif": "c2b412da638aac4950da2541da70daa10e3e60796ffa6b03a8880549ede0429d",
+      "motif-dictionary": "b849e04e07a8d35073e72d666f749a7a01a270fe478e0731a1c17934e8cc127a",
+      "motif-dictionary-site-permutation": "5587c401a97c4aa14d119ddac8b05c98f6024359de00a6f40174a33c3f914a71",
+      "motif-dictionary-temporal": "49175ca6cfbaa0e3605979178dd02cad9583f6e9ed51b4e846b403b2d0dbe0f0",
+      "motif-permutation": "d5744e2c610ebc0b41a0a216bcefa8762e25edff8a96affcb8b89c68b5927f2f",
+      "motif-site-permutation": "75b60000e3d825323bef588e7849cd0579ad31c717f52ec92b3d20fdd8a08ec5",
+      "motif-temporal": "9ff31728b3a458ecaefe86d83e9cd4a820ff2162b675076eab8588b653ceb520",
+      "temporal": "9005280ff4b3e3511432ffea490384110579e89916b46aaffd0885a6ce24224f"
+    },
+    "relabeled_sha256": [
+      "4446f2393bcab9ea30d83011f55cdaeb630803bb15ea5075653fa520c09f4d55",
+      "c1636fa8d0dd85366219aecb72325a86085d20708dd205e1e60ab9770175af53",
+      "6e639f47c25ffa53fb51ff92944ea5e00bdb53a4152c110e3fd7614b86a7ba43"
+    ],
+    "trace_sha256": "81105958e1c05973d034512b40e6516f4f3960ea98316f44b36422858cbc194e"
+  }
+}

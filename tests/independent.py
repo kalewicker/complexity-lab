@@ -1932,17 +1932,23 @@ def check_dictionary_site_permutation(args, directory):
     }
 
 
+def anchored_dictionary_frames():
+    a, b = list(range(1, 7)), list(range(7, 13))
+    frames = []
+    for i in range(9):
+        nuisance = list(range(100+i*24, 124+i*24))
+        frames.append(a + nuisance[:2] + b + nuisance[2:] + [999])
+    return frames
+
+
 def check_dictionary_anchored_permutation(args, directory):
     trace = directory / "categorical-motif-dictionary-anchored-permutation.cltr"
     mode = "--categorical-motif-dictionary-anchored-permutation"
     split = (4, 1, 3, 36)
     anchor = (8, 6)
     count, seed = 19, 42
-    a, b = list(range(1, 7)), list(range(7, 13))
-    frames = []
-    for i in range(9):
-        nuisance = list(range(100+i*24, 124+i*24))
-        frames.append(a + nuisance[:2] + b + nuisance[2:] + [999])
+    frames = anchored_dictionary_frames()
+    a = frames[0][:6]
     data = write_temporal_steps(trace, frames)
 
     def evaluate(draws=count, interval=anchor):
@@ -2003,6 +2009,54 @@ def check_dictionary_anchored_permutation(args, directory):
         "rank": [extreme+1, count+1],
         "control_charged_gain_bits": int(negative["charged_gain_vs_first_bits"]),
     }
+
+
+def check_categorical_relabeling(args, directory):
+    trace = directory / "categorical-relabeling.cltr"
+    maps = (
+        lambda label: 0xffffffff - label,
+        lambda label: label ^ 0x80000000,
+        lambda label: ((label - 1) * 0x9e3779b1) & 0xffffffff,
+    )
+    fixtures = {
+        "persistent": (anchored_dictionary_frames(), (4, 1, 3, 36)),
+        "unique": ([list(range(36*i, 36*(i+1))) for i in range(5)], (2, 1, 2, 36)),
+    }
+    evidence = {}
+    for name, (frames, split) in fixtures.items():
+        modes = {
+            "baselines": (), "iid": (), "compare": (), "motif": (), "motif-dictionary": (),
+            "temporal": split, "motif-temporal": split, "motif-dictionary-temporal": split,
+            "motif-permutation": (*split, 19, 42), "motif-site-permutation": (*split, 19, 42),
+            "motif-dictionary-site-permutation": (*split, 19, 42),
+        }
+        if name == "persistent":
+            modes["motif-dictionary-anchored-permutation"] = (*split, 8, 6, 19, 42)
+        original = write_temporal_steps(trace, frames)
+        reference = {mode: run(args.eval, f"--categorical-{mode}", *options, trace)
+                     for mode, options in modes.items()}
+        dictionary, = csv.DictReader(io.StringIO(reference["motif-dictionary-temporal"]))
+        assert dictionary["status"] == "valid"
+        if name == "persistent":
+            assert dictionary["second_occurrences"] == "3"
+        else:
+            assert dictionary["reason"] == "no_training_dictionary"
+            huffman, = csv.DictReader(io.StringIO(reference["temporal"]))
+            assert huffman["unseen_symbols"] == "72"
+        mapped_digests = []
+        for rename in maps:
+            renamed = write_temporal_steps(trace, [[rename(label) for label in frame] for frame in frames])
+            assert renamed != original
+            mapped_digests.append(hashlib.sha256(renamed).hexdigest())
+            for mode, options in modes.items():
+                assert run(args.eval, f"--categorical-{mode}", *options, trace) == reference[mode], (name, mode)
+        evidence[name] = {
+            "trace_sha256": hashlib.sha256(original).hexdigest(),
+            "relabeled_sha256": mapped_digests,
+            "csv_sha256_by_mode": {mode: hashlib.sha256(data.encode()).hexdigest()
+                                   for mode, data in reference.items()},
+        }
+    return evidence
 
 
 def check_motif_calibration_runner(args, directory):
@@ -2564,6 +2618,7 @@ def check(args, directory):
         "categorical_motif_site_permutation": check_categorical_motif_site_permutation(args, directory),
         "dictionary_site_permutation": check_dictionary_site_permutation(args, directory),
         "dictionary_anchored_permutation": check_dictionary_anchored_permutation(args, directory),
+        "categorical_relabeling": check_categorical_relabeling(args, directory),
         "motif_calibration_runner": check_motif_calibration_runner(args, directory),
         "site_calibration_runner": check_site_calibration_runner(args, directory),
         "dictionary_calibration_runner": check_dictionary_calibration_runner(args, directory),
